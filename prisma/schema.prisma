@@ -110,9 +110,7 @@ model PricingTier {
 model CardTemplate {
   id          String   @id @default(uuid()) @db.Uuid
   title       String
-  description String?
   imageUrl    String
-  price       Float    @default(0.00)
   status      TemplateStatus @default(DRAFT)
   createdById String   @db.Uuid
   createdAt   DateTime @default(now())

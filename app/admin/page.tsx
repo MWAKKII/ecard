@@ -1,14 +1,53 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // keep in sync with /api/admin/templates
+const MAX_SOURCE_BYTES = 12 * 1024 * 1024; // reject monster files before decoding
+const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"];
+
+function readAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read that file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Downscale large photos (max 1600px) and re-encode so the stored design stays
+ * small — a phone photo can be 8 MB before this and ~200 KB after.
+ */
+async function encodeForStorage(file: File): Promise<string> {
+  if (file.type === "image/gif") return readAsDataURL(file); // keep animation
+  const bitmap = await createImageBitmap(file);
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) {
+    bitmap.close();
+    throw new Error("Your browser could not process that image");
+  }
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  let dataUrl = file.type === "image/png" ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", 0.85);
+  // PNG screenshots can still be heavy — fall back to JPEG if over the cap.
+  if (dataUrl.length > MAX_UPLOAD_BYTES) dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+  if (dataUrl.length > MAX_UPLOAD_BYTES) {
+    throw new Error("That image is too large even after compression — try a smaller file");
+  }
+  return dataUrl;
+}
 import { useRouter } from "next/navigation";
 
 interface Template {
   id: string;
   title: string;
-  description?: string;
   imageUrl: string;
-  price: number;
 }
 
 interface Payment {
@@ -27,10 +66,11 @@ export default function AdminDashboard() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [designTitle, setDesignTitle] = useState("");
-  const [designDesc, setDesignDesc] = useState("");
-  const [designImage, setDesignImage] = useState("");
-  const [designPrice, setDesignPrice] = useState("");
+  const [designFile, setDesignFile] = useState<{ dataUrl: string; name: string; size: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [designError, setDesignError] = useState("");
   const [loading, setLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     fetchTemplates();
@@ -57,22 +97,48 @@ export default function AdminDashboard() {
     }
   }
 
+  async function handleFile(file: File) {
+    setDesignError("");
+    if (!ACCEPTED_TYPES.includes(file.type)) {
+      setDesignError("Please choose a PNG, JPEG, WebP, GIF or AVIF image file.");
+      return;
+    }
+    if (file.size > MAX_SOURCE_BYTES) {
+      setDesignError("That file is larger than 12 MB — please pick a smaller image.");
+      return;
+    }
+    try {
+      const dataUrl = await encodeForStorage(file);
+      setDesignFile({ dataUrl, name: file.name, size: Math.round((dataUrl.length * 3) / 4) });
+    } catch (error) {
+      setDesignError(error instanceof Error ? error.message : "Could not load that image");
+    }
+  }
+
   async function handleAddDesign(event: React.FormEvent) {
     event.preventDefault();
+    if (!designFile) {
+      setDesignError("Choose a design image first.");
+      return;
+    }
     setLoading(true);
+    setDesignError("");
     try {
       const res = await fetch("/api/admin/templates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: designTitle, description: designDesc, imageUrl: designImage, price: designPrice }),
+        body: JSON.stringify({ title: designTitle, imageUrl: designFile.dataUrl }),
       });
-      if (res.ok) {
-        setDesignTitle("");
-        setDesignDesc("");
-        setDesignImage("");
-        setDesignPrice("");
-        fetchTemplates();
+      const data = await res.json().catch(() => ({}) as Record<string, string>);
+      if (!res.ok) {
+        setDesignError(data.error || "Failed to publish the design");
+        return;
       }
+      setDesignTitle("");
+      setDesignFile(null);
+      fetchTemplates();
+    } catch {
+      setDesignError("Unable to connect to the design service.");
     } finally {
       setLoading(false);
     }
@@ -124,15 +190,43 @@ export default function AdminDashboard() {
             <div className="mb-6"><h2 className="text-lg font-bold text-gray-900">Add a card design</h2><p className="mt-1 text-sm text-gray-500">Publish a reusable invitation template for organizers.</p></div>
             <form onSubmit={handleAddDesign} className="space-y-4">
               <label className="block text-sm font-semibold text-gray-700">Template title<input type="text" value={designTitle} onChange={(event) => setDesignTitle(event.target.value)} placeholder="Royal Gold Wedding" required className="mt-2 w-full rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100" /></label>
-              <label className="block text-sm font-semibold text-gray-700">Description<input type="text" value={designDesc} onChange={(event) => setDesignDesc(event.target.value)} placeholder="Elegant floral theme" className="mt-2 w-full rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100" /></label>
-              <label className="block text-sm font-semibold text-gray-700">Image preview URL<input type="url" value={designImage} onChange={(event) => setDesignImage(event.target.value)} placeholder="https://..." required className="mt-2 w-full rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100" /></label>
-              <label className="block text-sm font-semibold text-gray-700">Design price<input type="number" step="0.01" value={designPrice} onChange={(event) => setDesignPrice(event.target.value)} placeholder="0.00" className="mt-2 w-full rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100" /></label>
-              <button type="submit" disabled={loading} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{loading ? "Publishing..." : "Publish design"}</button>
+              <div>
+                <p className="block text-sm font-semibold text-gray-700">Design image</p>
+                <input ref={fileInputRef} type="file" accept={ACCEPTED_TYPES.join(",")} className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file); event.target.value = ""; }} />
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Upload a design image"
+                  onClick={() => fileInputRef.current?.click()}
+                  onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); fileInputRef.current?.click(); } }}
+                  onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(event) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void handleFile(file); }}
+                  className={`mt-2 cursor-pointer rounded-xl border-2 border-dashed px-4 py-7 text-center outline-none transition ${dragging ? "border-blue-500 bg-blue-50" : "border-gray-300 bg-gray-50 hover:border-blue-400 hover:bg-white"}`}
+                >
+                  {designFile ? (
+                    <div className="space-y-2">
+                      <img src={designFile.dataUrl} alt="Selected design preview" className="mx-auto max-h-44 rounded-lg border border-gray-200 object-contain" />
+                      <p className="truncate text-xs font-semibold text-gray-700">{designFile.name} · {(designFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+                      <p className="text-xs text-gray-500">Click or drop another image to replace it</p>
+                    </div>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="mx-auto h-8 w-8 text-gray-400"><path d="M12 16V4m0 0L7 9m5-5 5 5" /><path d="M4 16v2a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-2" /></svg>
+                      <p className="mt-2 text-sm font-semibold text-gray-700">Drag &amp; drop your design here</p>
+                      <p className="mt-1 text-xs text-gray-500">or <span className="font-semibold text-blue-600">browse your PC</span> — PNG, JPEG, WebP, GIF or AVIF, up to 4 MB</p>
+                    </>
+                  )}
+                </div>
+                {designFile && <button type="button" onClick={() => { setDesignFile(null); setDesignError(""); }} className="mt-2 text-xs font-semibold text-red-600 transition hover:text-red-700">Remove image</button>}
+              </div>
+              {designError && <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{designError}</p>}
+              <button type="submit" disabled={loading || !designFile} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{loading ? "Publishing..." : "Publish design"}</button>
             </form>
           </section>
           <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
             <div className="mb-6"><h2 className="text-lg font-bold text-gray-900">Published designs</h2><p className="mt-1 text-sm text-gray-500">{templates.length} template{templates.length === 1 ? "" : "s"} available</p></div>
-            {templates.length === 0 ? <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-8 text-center text-sm text-gray-500">No templates uploaded yet.</p> : <div className="grid gap-3 sm:grid-cols-2">{templates.map((template) => <article key={template.id} className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50"><img src={template.imageUrl} alt={template.title} className="h-32 w-full object-cover" /><div className="p-3"><h3 className="truncate text-sm font-bold text-gray-900">{template.title}</h3><p className="mt-1 line-clamp-2 text-xs text-gray-500">{template.description || "No description"}</p><p className="mt-3 text-sm font-bold text-blue-600">{template.price.toLocaleString()} TSh</p></div></article>)}</div>}
+            {templates.length === 0 ? <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-8 text-center text-sm text-gray-500">No templates uploaded yet.</p> : <div className="grid gap-3 sm:grid-cols-2">{templates.map((template) => <article key={template.id} className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50"><img src={template.imageUrl} alt={template.title} className="h-32 w-full object-cover" /><div className="p-3"><h3 className="truncate text-sm font-bold text-gray-900">{template.title}</h3></div></article>)}</div>}
           </section>
         </div>}
 

@@ -95,9 +95,7 @@ PricingTier ("PricingTier" — model has no @@map)
 CardTemplate (card_templates)
 ├── id: UUID (PK)
 ├── title: String
-├── description: String?
-├── imageUrl: String
-├── price: Float
+├── imageUrl: String                            (base64 data URL of the uploaded design image)
 ├── status: TemplateStatus (DRAFT, ACTIVE, ARCHIVED)
 ├── createdById: UUID (FK)
 ├── createdAt: DateTime
@@ -515,7 +513,7 @@ app/api/
 │   ├── pricing/
 │   │   └── route.ts          (GET/POST/PATCH - Tier CRUD, overlap validation, active toggle; admin only)
 │   ├── templates/
-│   │   └── route.ts          (GET - List templates, POST - Create template)
+│   │   └── route.ts          (GET - List templates, admin only; POST - Upload design image (drag&drop file as data URL))
 │   └── users/
 │       └── route.ts          (GET - Users + owned-data counts; PATCH - role/authorization; DELETE - remove unused account)
 │
@@ -671,7 +669,8 @@ prisma/migrations/
 ├── 20260924191500_reconcile_legacy_baseline      (reconciliation - see note)
 ├── 20260924192000_payment_business_workflow
 ├── 20260924200000_set_currency_tsh
-└── 20261021100000_step_8_9_guest_qr_event_types  (Steps 8/9)
+├── 20261021100000_step_8_9_guest_qr_event_types  (Steps 8/9)
+└── 20261021110000_remove_card_template_price_description
 ```
 
 Notes:
@@ -688,6 +687,9 @@ Notes:
   and the new guest CardStatus enum, swaps guests.inviteToken for a backfilled
   unique qrToken, adds guest whatsapp/cardType/cardStatus, makes guest email
   optional, and adds event type/coupleNames.
+- `remove_card_template_price_description` drops card_templates.price and
+  card_templates.description — designs are now plain image uploads
+  (drag & drop from the admin dashboard).
 - Apply with `npx prisma migrate deploy` once the Supabase credentials in
   .env are valid. Run `npx prisma migrate status` first: databases previously
   shaped by `prisma db push` will show a different history, and
@@ -713,7 +715,9 @@ Notes:
 
 4. **Card Templates**
    - Reusable invitation designs
-   - Image-based templates with pricing
+   - Image upload from the admin's PC (drag & drop or file picker), stored as
+     a base64 data URL in `card_templates.imageUrl` — client-side downscaling
+     keeps uploads small; the API validates type, magic bytes and a 4 MB cap
    - Admin-controlled template library
 
 5. **Audit Trail**
