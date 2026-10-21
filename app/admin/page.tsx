@@ -116,6 +116,7 @@ export default function AdminDashboard() {
           <button onClick={() => setActiveTab("designs")} className={`rounded-lg px-4 py-2.5 text-sm font-semibold transition ${activeTab === "designs" ? "bg-blue-600 text-white shadow-sm" : "text-gray-600 hover:bg-gray-50"}`}>Card designs</button>
           <button onClick={() => setActiveTab("payments")} className={`rounded-lg px-4 py-2.5 text-sm font-semibold transition ${activeTab === "payments" ? "bg-blue-600 text-white shadow-sm" : "text-gray-600 hover:bg-gray-50"}`}>Payments{submittedPayments > 0 && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">{submittedPayments}</span>}</button>
           <button onClick={() => router.push("/admin/pricing")} className="rounded-lg px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">Pricing manager</button>
+          <button onClick={() => router.push("/admin/users")} className="rounded-lg px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">Users</button>
         </nav>
 
         {activeTab === "designs" && <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">

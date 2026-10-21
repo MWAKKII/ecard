@@ -514,8 +514,10 @@ app/api/
 │   │   └── route.ts          (GET - List payments; PATCH - verify/reject payment, authorize/suspend event)
 │   ├── pricing/
 │   │   └── route.ts          (GET/POST/PATCH - Tier CRUD, overlap validation, active toggle; admin only)
-│   └── templates/
-│       └── route.ts          (GET - List templates, POST - Create template)
+│   ├── templates/
+│   │   └── route.ts          (GET - List templates, POST - Create template)
+│   └── users/
+│       └── route.ts          (GET - Users + owned-data counts; PATCH - role/authorization; DELETE - remove unused account)
 │
 ├── events/
 │   ├── route.ts              (GET - List user events, POST - Create event with server-side quote)
@@ -582,8 +584,10 @@ app/
 │
 ├── admin/
 │   ├── page.tsx               (Admin dashboard)
-│   └── pricing/
-│       └── page.tsx           (Pricing tier management)
+│   ├── pricing/
+│   │   └── page.tsx           (Pricing tier management)
+│   └── users/
+│       └── page.tsx           (Account manager: role, authorization, guarded deletion)
 │
 └── dev/
     └── db/
