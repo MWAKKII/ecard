@@ -526,9 +526,10 @@ app/api/
 │       ├── pay/
 │       │   └── route.ts      (POST - Submit event payment)
 │       └── guests/
-│           ├── route.ts      (GET - List guests (qrToken excluded), POST - Add guest)
+│           ├── route.ts      (GET - List guests (qrToken excluded), POST - Add guest
+│           │                  capped at the event's pricing-tier maxGuests)
 │           ├── import/
-│           │   └── route.ts  (POST - Bulk CSV import)
+│           │   └── route.ts  (POST - Bulk CSV import, tier capacity enforced)
 │           └── [guestId]/
 │               ├── route.ts  (PATCH - Update guest, DELETE - Remove guest)
 │               └── qr/
@@ -571,14 +572,20 @@ app/
 │       └── page.tsx           (User profile settings)
 │
 ├── events/
-│   ├── page.tsx               (List user events)
+│   ├── page.tsx               (List user events; cards link to the event workspace)
 │   ├── create/
 │   │   └── page.tsx           (Create event form: type, date, venue, guest count)
 │   └── [id]/
+│       ├── page.tsx           (Event workspace — tabbed client dashboard (spec
+│       │                       section 10): Dashboard summary, Guest list,
+│       │                       Event details, Scan E-Card [Step 11 placeholder],
+│       │                       Reports [Step 12 placeholder]; capacity meter
+│       │                       driven by the event's pricing tier)
 │       ├── pay/
 │       │   └── page.tsx       (Payment submission page)
 │       └── guests/
-│           └── page.tsx       (Guest management: search, filters, add, CSV import, QR links)
+│           └── page.tsx       (Thin wrapper around the shared GuestManager;
+│                               kept so existing links keep working)
 │
 ├── admin/
 │   ├── page.tsx               (Admin dashboard)
@@ -642,6 +649,14 @@ lib/
 │                            event ownership/status helpers)
 └── prisma.ts               (Prisma client singleton)
     └── createPrismaClient() (Using @prisma/adapter-pg)
+
+Shared components:
+components/
+└── guest-manager.tsx        (Guest list UI used by the /events/[id] "Guest list"
+                              tab and the legacy /events/[id]/guests page: tier
+                              capacity meter, add form and CSV import disabled at
+                              capacity, search/filters, scan-time column, gate for
+                              non-AUTHORIZED events)
 ```
 
 ## Environment Configuration
@@ -731,6 +746,13 @@ Notes:
    - Owner-only QR PNG rendering; audited guest add/update/delete/import
    - Guest creation gated on event being AUTHORIZED, capacity checked
      against the matching pricing tier
+   - Event workspace at /events/[id] (spec section 10, "Client Dashboard"):
+     tabbed dashboard with attendance summary (total / attended / not
+     attended / %), guest list, event details, and placeholder tabs for
+     scanning (Step 11) and reports (Step 12)
+   - The pricing tier's maxGuests is the hard guest capacity: enforced
+     server-side on add and CSV import (409 past the limit) and surfaced
+     in the UI as a capacity meter that disables adding/importing when full
 
 ## Data Flow Summary
 

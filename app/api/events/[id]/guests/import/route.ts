@@ -56,11 +56,22 @@ export async function POST(request: Request, { params }: RouteContext) {
       return NextResponse.json({ error: "No guest rows found in the upload." }, { status: 400 });
     }
 
-    const existingCount = await prisma.guest.count({ where: { eventId } });
-    if (existingCount + rows.length > event.guestCount) {
+    // Pricing-tier capacity governs the list size (e.g. the 1-100 tier tops
+    // out at 100 guests) — a CSV import may never push past the tier limit.
+    const [existingCount, tier] = await Promise.all([
+      prisma.guest.count({ where: { eventId } }),
+      prisma.pricingTier.findUnique({ where: { id: event.pricingTierId } }),
+    ]);
+    const capacity = tier?.maxGuests ?? event.guestCount;
+    if (existingCount + rows.length > capacity) {
+      const remaining = Math.max(0, capacity - existingCount);
+      const plan = tier ? `The ${tier.minGuests}-${tier.maxGuests} guest tier` : "This pricing plan";
       return NextResponse.json(
         {
-          error: `This event is priced for ${event.guestCount} guests; you already have ${existingCount}. Raise the expected guest count before importing ${rows.length} more.`,
+          error:
+            `${plan} allows up to ${capacity} guest(s); ${existingCount} already on the list ` +
+            `(${remaining} slot${remaining === 1 ? "" : "s"} left). Import ${remaining} or fewer rows, ` +
+            `or choose a larger tier.`,
         },
         { status: 409 },
       );

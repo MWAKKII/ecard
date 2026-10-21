@@ -97,11 +97,22 @@ export async function POST(request: Request, { params }: RouteContext) {
       );
     }
 
-    // Enforce the event's declared capacity (spec — guest count drives pricing).
-    const guestCount = await prisma.guest.count({ where: { eventId } });
-    if (guestCount >= event.guestCount) {
+    // Enforce the event's pricing-tier capacity: the "1-100" tier allows at
+    // most 100 guests, "101-200" allows 200, and so on (spec — guest count
+    // drives pricing, so the tier's range is the hard capacity).
+    const [guestCount, tier] = await Promise.all([
+      prisma.guest.count({ where: { eventId } }),
+      prisma.pricingTier.findUnique({ where: { id: event.pricingTierId } }),
+    ]);
+    const capacity = tier?.maxGuests ?? event.guestCount;
+    if (guestCount >= capacity) {
+      const plan = tier ? `The ${tier.minGuests}-${tier.maxGuests} guest tier` : "This pricing plan";
       return NextResponse.json(
-        { error: `This event is priced for ${event.guestCount} guests. Raise the expected guest count first.` },
+        {
+          error:
+            `${plan} allows up to ${capacity} guest(s) and this event already has ${guestCount}. ` +
+            `Choose a larger tier to add more.`,
+        },
         { status: 409 },
       );
     }

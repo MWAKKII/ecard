@@ -87,7 +87,11 @@ export default function EventsPage() {
                 <div key={event.id} className="p-6 border rounded-xl shadow-sm bg-white flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-start gap-4">
-                      <h3 className="font-bold text-xl text-gray-900">{event.title}</h3>
+                      <h3 className="font-bold text-xl text-gray-900">
+                        <Link href={`/events/${event.id}`} className="hover:text-blue-600 transition">
+                          {event.title}
+                        </Link>
+                      </h3>
                       
                       {/* Payment & Event Status Badge */}
                       <span className={`px-2.5 py-1 text-xs font-semibold rounded-full uppercase tracking-wider ${
@@ -117,19 +121,29 @@ export default function EventsPage() {
                     <span>Payment: {paymentStatus} | Quote: {Number(event.quotedAmount || 0).toLocaleString()} TSh</span>
                     <div className="flex items-center gap-4">
                       {displayStatus === "AUTHORIZED" && (
+                        <>
+                          <Link
+                            href={`/events/${event.id}/guests`}
+                            className="text-emerald-600 font-medium hover:underline"
+                          >
+                            Guests
+                          </Link>
+                          <Link
+                            href={`/events/${event.id}`}
+                            className="text-blue-600 font-medium hover:underline"
+                          >
+                            Manage event &rarr;
+                          </Link>
+                        </>
+                      )}
+                      {displayStatus !== "AUTHORIZED" && (
                         <Link
-                          href={`/events/${event.id}/guests`}
-                          className="text-emerald-600 font-medium hover:underline"
+                          href={`/events/${event.id}/pay`}
+                          className="text-blue-600 font-medium hover:underline"
                         >
-                          Guests
+                          Payment &amp; details &rarr;
                         </Link>
                       )}
-                      <Link
-                        href={`/events/${event.id}/pay`}
-                        className="text-blue-600 font-medium hover:underline"
-                      >
-                        View Details &rarr;
-                      </Link>
                     </div>
                   </div>
                 </div>
