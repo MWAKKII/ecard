@@ -60,16 +60,20 @@ export default function EventWorkspacePage() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/events/${eventId}`, { credentials: "include" });
-    const data = await res.json();
+    // The two requests are independent — fire them together instead of
+    // waiting for the event before asking for guests (halves load time).
+    const [res, guestRes] = await Promise.all([
+      fetch(`/api/events/${eventId}`, { credentials: "include" }),
+      fetch(`/api/events/${eventId}/guests`, { credentials: "include" }),
+    ]);
+    const [data, list] = await Promise.all([
+      res.json(),
+      guestRes.ok ? guestRes.json() : Promise.resolve(null),
+    ]);
     if (!res.ok) throw new Error(data.error || "Failed to load the event");
     setEvent(data);
-    if (data.status === "AUTHORIZED") {
-      const guestRes = await fetch(`/api/events/${eventId}/guests`, { credentials: "include" });
-      if (guestRes.ok) {
-        const list = await guestRes.json();
-        setGuests(Array.isArray(list) ? list : []);
-      }
+    if (data.status === "AUTHORIZED" && Array.isArray(list)) {
+      setGuests(list);
     } else {
       setGuests([]);
     }

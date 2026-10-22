@@ -540,6 +540,25 @@ app/api/
         └── route.ts          (GET - Current user profile)
 ```
 
+### API query & latency notes
+
+Every Prisma query is a network roundtrip to the hosted database (~200–500 ms
+from this environment), so route handlers are written to use as few as possible:
+
+- `getSession()` re-checks the user row on every request (deliberate: deleted
+  or role-changed accounts lose access immediately) — always one query.
+- Data needed by a page is fetched in **one** query with `include`/`select`
+  rather than several sequential lookups: e.g. `GET /api/events/[id]` returns
+  the event, its pricing tier and the latest payment in a single call, and
+  `GET /api/events/[id]/guests` returns the ownership/status gate together
+  with the guest list.
+- List endpoints never include relations the UI does not use. `GET /api/events`
+  deliberately omits `cardTemplate` (it carries a base64 image and could add
+  megabytes per event) and `pricingTier`.
+- Client pages fire independent requests together (`Promise.all`), so the
+  event workspace loads the event and guest list in parallel instead of
+  waiting for one before starting the other.
+
 Additional route handlers:
 
 ```

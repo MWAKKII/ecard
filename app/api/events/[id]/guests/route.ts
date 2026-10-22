@@ -30,29 +30,43 @@ async function requireOwnedAuthorizedEvent(eventId: string) {
 export async function GET(_request: Request, { params }: RouteContext) {
   try {
     const { id: eventId } = await params;
-    const gate = await requireOwnedAuthorizedEvent(eventId);
-    if ("error" in gate) return gate.error;
+    const session = await getSession();
+    if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+    // Single roundtrip: ownership + authorization gate + guest list.
     // qrToken is deliberately excluded — it is only obtainable via the QR
     // image endpoint, never serialized to list responses (Step 9).
-    const guests = await prisma.guest.findMany({
-      where: { eventId },
+    const event = await prisma.event.findFirst({
+      where: { id: eventId, ownerId: session.userId },
       select: {
-        id: true,
-        fullName: true,
-        email: true,
-        phone: true,
-        whatsapp: true,
-        cardType: true,
-        cardStatus: true,
-        plusOnes: true,
-        createdAt: true,
-        attendances: true,
+        status: true,
+        guests: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            phone: true,
+            whatsapp: true,
+            cardType: true,
+            cardStatus: true,
+            plusOnes: true,
+            createdAt: true,
+            attendances: true,
+          },
+          orderBy: { createdAt: "asc" },
+        },
       },
-      orderBy: { createdAt: "asc" },
     });
 
-    return NextResponse.json(guests);
+    if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    if (event.status !== "AUTHORIZED") {
+      return NextResponse.json(
+        { error: "This event must be authorized before guests can be managed" },
+        { status: 403 },
+      );
+    }
+
+    return NextResponse.json(event.guests);
   } catch (error) {
     console.error("Guest list error:", error);
     return NextResponse.json({ error: "Unable to load guests" }, { status: 500 });

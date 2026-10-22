@@ -14,21 +14,18 @@ export async function GET(_request: Request, { params }: RouteContext) {
 
     const { id } = await params;
     // Ownership boundary: a client can only read their own events (spec section 41).
-    const event = await getOwnedEvent(id, session.userId);
+    // One query returns the event, its pricing tier and the latest payment
+    // (previously 3 sequential queries — each one is a full roundtrip).
+    const event = await prisma.event.findFirst({
+      where: { id, ownerId: session.userId },
+      include: {
+        pricingTier: true,
+        payments: { orderBy: { createdAt: "desc" }, take: 1 },
+      },
+    });
     if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
 
-    const [payments] = await Promise.all([
-      prisma.payment.findMany({
-        where: { eventId: event.id },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-      }),
-      // nothing else for now — kept as array shape for symmetry with includes
-    ]);
-
-    const pricingTier = await prisma.pricingTier.findUnique({ where: { id: event.pricingTierId } });
-
-    return NextResponse.json({ ...event, pricingTier, payments });
+    return NextResponse.json(event);
   } catch (error) {
     console.error("Event details error:", error);
     return NextResponse.json({ error: "Unable to load event" }, { status: 500 });

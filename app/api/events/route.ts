@@ -10,12 +10,27 @@ export async function GET() {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+    // Only the fields the event list renders. Deliberately no cardTemplate
+    // (it carries a base64 image) and no pricingTier — including them cost
+    // extra roundtrips and could add megabytes to the response.
     const events = await prisma.event.findMany({
       where: { ownerId: session.userId },
-      include: {
-        cardTemplate: true,
-        pricingTier: true,
-        payments: { orderBy: { createdAt: "desc" }, take: 1 },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        type: true,
+        status: true,
+        startsAt: true,
+        location: true,
+        guestCount: true,
+        quotedAmount: true,
+        createdAt: true,
+        payments: {
+          select: { status: true },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
       },
       orderBy: { createdAt: "desc" },
     });

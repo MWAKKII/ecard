@@ -94,7 +94,12 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
   const [importResult, setImportResult] = useState("");
 
   const loadData = useCallback(async () => {
-    const eventRes = await fetch(`/api/events/${eventId}`, { credentials: "include" });
+    // Fire both requests together — they are independent, and the guests
+    // endpoint is already gated server-side (401/403/404).
+    const [eventRes, guestRes] = await Promise.all([
+      fetch(`/api/events/${eventId}`, { credentials: "include" }),
+      fetch(`/api/events/${eventId}/guests`, { credentials: "include" }),
+    ]);
     if (!eventRes.ok) {
       const data = await eventRes.json().catch(() => ({}));
       throw new Error(data.error || "Failed to load the event");
@@ -109,7 +114,6 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
       return;
     }
     setGate(null);
-    const guestRes = await fetch(`/api/events/${eventId}/guests`, { credentials: "include" });
     if (!guestRes.ok) {
       const data = await guestRes.json().catch(() => ({}));
       throw new Error(data.error || "Failed to load guests");
