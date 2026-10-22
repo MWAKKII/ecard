@@ -607,7 +607,11 @@ app/
 │                               kept so existing links keep working)
 │
 ├── admin/
-│   ├── page.tsx               (Admin dashboard)
+│   ├── layout.tsx             (Persistent admin shell: header, logout and the
+│   │                           section tabs shown on every admin page)
+│   ├── page.tsx               (Card designs — template upload & gallery)
+│   ├── payments/
+│   │   └── page.tsx           (Payment review: verify/reject, authorize/suspend event)
 │   ├── pricing/
 │   │   └── page.tsx           (Pricing tier management)
 │   └── users/

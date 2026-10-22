@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 
 interface AdminUser {
   id: string;
@@ -31,7 +30,6 @@ const authBadgeClass: Record<AdminUser["authorizationStatus"], string> = {
 };
 
 export default function AdminUsersPage() {
-  const router = useRouter();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -106,17 +104,15 @@ export default function AdminUsersPage() {
     "rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-50";
 
   return (
-    <main className="min-h-screen bg-gray-50 px-5 py-8 text-gray-900 md:px-10 md:py-12">
-      <div className="mx-auto max-w-5xl">
-        <header className="mb-8">
-          <button onClick={() => router.push("/admin")} className="mb-4 text-sm font-semibold text-blue-600 hover:text-blue-700">&larr; Back to dashboard</button>
-          <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-600">Admin settings</p>
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">Account manager</h1>
-          <p className="mt-2 text-sm text-gray-500">
-            Change roles and authorization statuses, or delete unused test accounts.
-            Accounts that own events, payments or templates cannot be deleted.
-          </p>
-        </header>
+    <div>
+      <header className="mb-8">
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-600">Admin settings</p>
+        <h2 className="text-2xl font-bold tracking-tight text-gray-900">Account manager</h2>
+        <p className="mt-2 text-sm text-gray-500">
+          Change roles and authorization statuses, or delete unused test accounts.
+          Accounts that own events, payments or templates cannot be deleted.
+        </p>
+      </header>
 
         {error && <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
         {success && <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{success}</div>}
@@ -208,7 +204,6 @@ export default function AdminUsersPage() {
             </div>
           )}
         </section>
-      </div>
-    </main>
+    </div>
   );
 }

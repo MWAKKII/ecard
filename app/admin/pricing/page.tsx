@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 
 interface PricingTier {
   id: string;
@@ -12,7 +11,6 @@ interface PricingTier {
 }
 
 export default function AdminPricingPage() {
-  const router = useRouter();
   const [tiers, setTiers] = useState<PricingTier[]>([]);
   const [minGuests, setMinGuests] = useState("");
   const [maxGuests, setMaxGuests] = useState("");
@@ -141,14 +139,12 @@ export default function AdminPricingPage() {
   const fieldClass = "mt-2 w-full rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-3 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100";
 
   return (
-    <main className="min-h-screen bg-gray-50 px-5 py-8 text-gray-900 md:px-10 md:py-12">
-      <div className="mx-auto max-w-5xl">
-        <header className="mb-8">
-          <button onClick={() => router.push("/admin")} className="mb-4 text-sm font-semibold text-blue-600 hover:text-blue-700">&larr; Back to dashboard</button>
-          <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-600">Admin settings</p>
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">Pricing manager</h1>
-          <p className="mt-2 text-sm text-gray-500">Set, review, edit, or remove per-guest pricing tiers.</p>
-        </header>
+    <div>
+      <header className="mb-6">
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-600">Admin settings</p>
+        <h2 className="text-2xl font-bold tracking-tight text-gray-900">Pricing manager</h2>
+        <p className="mt-2 text-sm text-gray-500">Set, review, edit, or remove per-guest pricing tiers.</p>
+      </header>
 
         {error && <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
         {success && <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{success}</div>}
@@ -167,7 +163,6 @@ export default function AdminPricingPage() {
           <div className="mb-5"><h2 className="text-lg font-bold text-gray-900">Current pricing tiers</h2><p className="mt-1 text-sm text-gray-500">A tier in use by an event or payment cannot be deleted.</p></div>
           {tiers.length === 0 ? <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-8 text-center text-sm text-gray-500">No pricing tiers configured.</p> : <div className="space-y-3">{tiers.map((tier) => editingId === tier.id ? <div key={tier.id} className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/50 p-4 sm:grid-cols-[1fr_auto_1fr_1.2fr_auto_auto] sm:items-end"><label className="text-xs font-bold uppercase tracking-wide text-gray-500">Min<input type="number" min="1" value={editingMin} onChange={(event) => setEditingMin(event.target.value)} className={fieldClass} /></label><span className="hidden pb-3 text-gray-400 sm:block">to</span><label className="text-xs font-bold uppercase tracking-wide text-gray-500">Max<input type="number" min="1" value={editingMax} onChange={(event) => setEditingMax(event.target.value)} className={fieldClass} /></label><label className="text-xs font-bold uppercase tracking-wide text-gray-500">TSh per guest<input type="number" min="0" step="0.01" value={editingPrice} onChange={(event) => setEditingPrice(event.target.value)} className={fieldClass} /></label><button type="button" onClick={() => handleUpdateTier(tier.id)} className="rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700">Save</button><button type="button" onClick={() => setEditingId(null)} className="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-600 hover:bg-gray-50">Cancel</button></div> : <div key={tier.id} className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-bold text-gray-900">{tier.minGuests.toLocaleString()} - {tier.maxGuests.toLocaleString()} guests</p><p className="mt-1 text-sm text-gray-500">{tier.price.toLocaleString()} TSh per guest</p><p className={`mt-1 text-xs font-semibold uppercase tracking-wide ${tier.active ? "text-emerald-600" : "text-gray-400"}`}>{tier.active ? "Active" : "Inactive"}</p></div><div className="flex gap-2"><button type="button" onClick={() => handleToggleActive(tier)} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:border-emerald-300 hover:text-emerald-600">{tier.active ? "Deactivate" : "Activate"}</button><button type="button" onClick={() => startEditing(tier)} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:border-blue-300 hover:text-blue-600">Edit</button><button type="button" onClick={() => handleDeleteTier(tier)} className="rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-600 shadow-sm hover:bg-red-50">Delete</button></div></div>)}</div>}
         </section>
-      </div>
-    </main>
+    </div>
   );
 }
