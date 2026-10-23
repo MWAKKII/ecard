@@ -87,6 +87,7 @@ export async function POST(request: Request) {
       data: {
         title,
         imageUrl,
+        status: "ACTIVE",
         createdById: admin.userId,
       },
     });

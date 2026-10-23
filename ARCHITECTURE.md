@@ -45,6 +45,7 @@
 │  • JWT Authentication (lib/jwt.ts on jsonwebtoken)                           │
 │  • bcrypt for password hashing                                               │
 │  • qrcode (server-side QR token PNG rendering)                               │
+│  • sharp (server-side PNG compositing: template + guest name + QR)           │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -492,6 +493,49 @@ AuditLog (audit_logs)
      ▼
 ```
 
+### Personalized E-Card Rendering (Step 8)
+
+```
+ Admin uploads a design        Event owner assigns it        Guest list → "Card"
+ (Card designs page)  ───────► (Event details tab)   ───────► (preview dialog)
+         │                            │                            │
+         ▼                            ▼                            ▼
+ card_templates.imageUrl      events.cardTemplateId      GET /api/events/[id]/guests/
+ (base64 in DB, served as                                      [guestId]/card
+ binary to organizers)                                              │
+                                                                    ▼
+                                                   sharp compositing, native template size:
+                                                     template + bottom gradient + name
+                                                     + event title + white QR box
+                                                                    │
+                                                                    ▼
+                                                     image/png → Download / WhatsApp
+```
+
+Rules:
+
+- The PNG contains only the guest name, the event title and the guest's opaque
+  `qrToken`; the token is 32 random base64url characters and never encodes
+  personal data. The server resolves it back to the guest record.
+- Rendering requires the event owner, an `AUTHORIZED` event and an `ACTIVE`
+  assigned design. First render moves the guest's card from `PENDING` to
+  `GENERATED`; delivery moves it to `SENT`.
+- Layout is template-agnostic: a dark gradient across the bottom keeps text
+  readable on any design and the QR is placed in a white rounded square so it
+  stays scannable. Output stays at the template's native dimensions.
+- `?download=1` returns `Content-Disposition: attachment`; without it the PNG is
+  inline for the preview dialog.
+- WhatsApp delivery uses the Web Share API with the actual PNG file when the
+  browser supports file sharing. Otherwise the card is downloaded and a
+  `wa.me/<guest phone>` chat opens with a pre-filled message so the organizer can
+  attach the PNG. Both paths mark the guest's card as `SENT` (best-effort).
+- Design images are never embedded in organizer API responses: the picker calls
+  `GET /api/templates` (id + title) and renders thumbnails from
+  `GET /api/templates/[id]/image` (binary, private cache).
+- The compositor itself takes ~150–250 ms once warm. The very first render after
+  a server start also pays a one-off ~7 s fontconfig cache build; database
+  roundtrips dominate normal request time.
+
 ## API Routes Structure
 
 ```
@@ -513,14 +557,16 @@ app/api/
 │   ├── pricing/
 │   │   └── route.ts          (GET/POST/PATCH - Tier CRUD, overlap validation, active toggle; admin only)
 │   ├── templates/
-│   │   └── route.ts          (GET - List templates, admin only; POST - Upload design image (drag&drop file as data URL))
+│   │   └── route.ts          (GET - List designs, admin only; POST - Upload design
+│   │                          image as a data URL, created ACTIVE)
 │   └── users/
 │       └── route.ts          (GET - Users + owned-data counts; PATCH - role/authorization; DELETE - remove unused account)
 │
 ├── events/
 │   ├── route.ts              (GET - List user events, POST - Create event with server-side quote)
 │   └── [id]/
-│       ├── route.ts          (GET - Event details, PATCH - Update event (owner only))
+│       ├── route.ts          (GET - Event details, PATCH - Update event incl.
+│       │                      cardTemplateId assignment; owner only)
 │       ├── card/
 │       │   └── route.ts      (GET - Card details, POST - Configure card)
 │       ├── pay/
@@ -532,8 +578,18 @@ app/api/
 │           │   └── route.ts  (POST - Bulk CSV import, tier capacity enforced)
 │           └── [guestId]/
 │               ├── route.ts  (PATCH - Update guest, DELETE - Remove guest)
+│               ├── card/
+│               │   └── route.ts (GET - Personalized PNG: template + name + QR,
+│               │                  ?download=1 for attachment; flips PENDING→GENERATED)
 │               └── qr/
 │                   └── route.ts (GET - QR token PNG, authorized event owner only)
+│
+├── templates/
+│   ├── route.ts              (GET - ACTIVE designs for organizers: id + title only)
+│   └── [id]/
+│       └── image/
+│           └── route.ts      (GET - Design image as binary, private cache)
+│
 │
 └── user/
     └── profile/
@@ -666,6 +722,9 @@ lib/
 │                            entity, metadata and client IP)
 ├── qr.ts                   (generateQrToken() - 32-char base64url from 192
 │                            random bits; renderQrPng() - server-side PNG)
+├── card-render.ts          (renderGuestCard() - sharp compositor: template
+│                            + guest name + event title + QR PNG; template-
+│                            agnostic layout, PNG output at native size)
 ├── guests.ts               (Step 8 guest validation, duplicate detection and
 │                            batch creation; tokens issued exactly once)
 ├── events.ts               (Server-side price quoting from active tiers,
@@ -675,11 +734,14 @@ lib/
 
 Shared components:
 components/
-└── guest-manager.tsx        (Guest list UI used by the /events/[id] "Guest list"
-                              tab and the legacy /events/[id]/guests page: tier
-                              capacity meter, add form and CSV import disabled at
-                              capacity, search/filters, scan-time column, gate for
-                              non-AUTHORIZED events)
+├── guest-manager.tsx        (Guest list UI used by the /events/[id] "Guest list"
+│                             tab and the legacy /events/[id]/guests page: tier
+│                             capacity meter, add form and CSV import disabled at
+│                             capacity, search/filters, scan-time column, gate for
+│                             non-AUTHORIZED events, Card action for delivery)
+└── guest-card-dialog.tsx    (Personalized PNG preview + Download + WhatsApp
+                              delivery; falls back to download + wa.me when the
+                              browser cannot share files)
 ```
 
 ## Environment Configuration
@@ -756,6 +818,7 @@ Notes:
    - Image upload from the admin's PC (drag & drop or file picker), stored as
      a base64 data URL in `card_templates.imageUrl` — client-side downscaling
      keeps uploads small; the API validates type, magic bytes and a 4 MB cap
+   - Uploads are created `ACTIVE` and immediately selectable by organizers
    - Admin-controlled template library
 
 5. **Audit Trail**
@@ -776,6 +839,20 @@ Notes:
    - The pricing tier's maxGuests is the hard guest capacity: enforced
      server-side on add and CSV import (409 past the limit) and surfaced
      in the UI as a capacity meter that disables adding/importing when full
+
+7. **Personalized E-Card PNG (Step 8)**
+   - Event owner assigns an admin-published design from the Event details tab
+     (`PATCH /api/events/[id]` → `cardTemplateId`, ACTIVE designs only)
+   - Server renders each card on demand with sharp: template + guest name +
+     event title + the guest's opaque QR token, always as PNG
+   - Layout is template-agnostic (bottom gradient, auto-shrinking name, white
+     QR pane) so any uploaded design stays readable and scannable
+   - Owner-only, AUTHORIZED-event-only endpoint; rendering flips the guest's
+     card status `PENDING → GENERATED`, delivery marks it `SENT`
+   - Download as an attachment or send via WhatsApp (Web Share file where
+     supported; otherwise PNG download + pre-filled `wa.me` chat)
+   - QR content is only the random token — no editable personal data; the
+     server resolves the token back to the guest record
 
 ## Data Flow Summary
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import GuestCardDialog from "@/components/guest-card-dialog";
 
 /**
  * Guest management UI (spec Step 8 / Client Dashboard "Guest List" tab).
@@ -36,6 +37,7 @@ interface EventInfo {
   title: string;
   status: string;
   guestCount: number;
+  cardTemplateId: string | null;
   pricingTier: { id: string; minGuests: number; maxGuests: number; price: number } | null;
 }
 
@@ -92,6 +94,9 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
 
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState("");
+
+  // Personalized card dialog (Step 8).
+  const [cardGuest, setCardGuest] = useState<Guest | null>(null);
 
   const loadData = useCallback(async () => {
     // Fire both requests together — they are independent, and the guests
@@ -368,6 +373,13 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
             </label>
           </div>
 
+          {event && !event.cardTemplateId && (
+            <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
+              Choose an E-Card design in the <span className="font-bold">Event details</span> tab to enable personalized
+              card generation for guests.
+            </p>
+          )}
+
           {/* Guest table */}
           <div className="bg-white border rounded-xl shadow-sm overflow-x-auto">
             <table className="w-full min-w-[900px] text-left text-sm">
@@ -438,6 +450,18 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
                             >
                               QR
                             </a>
+                            <button
+                              onClick={() => setCardGuest(guest)}
+                              disabled={!event?.cardTemplateId}
+                              title={
+                                event?.cardTemplateId
+                                  ? "Preview, download or send this guest's personalized card"
+                                  : "Choose an E-Card design in the Event details tab first"
+                              }
+                              className="text-emerald-600 hover:underline disabled:cursor-not-allowed disabled:text-gray-300 disabled:no-underline"
+                            >
+                              Card
+                            </button>
                             <button onClick={() => handleDelete(guest)} className="text-red-500 hover:underline">
                               Remove
                             </button>
@@ -455,6 +479,21 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
             CSV format: <code className="bg-gray-100 px-1 rounded">fullName,phone,whatsapp,email,cardType</code> — one header row required.
           </p>
         </>
+      )}
+
+      {cardGuest && event && (
+        <GuestCardDialog
+          eventId={eventId}
+          guest={cardGuest}
+          eventTitle={event.title}
+          templateTitle={null}
+          onClose={() => setCardGuest(null)}
+          onSent={() =>
+            setGuests((prev) =>
+              prev.map((guest) => (guest.id === cardGuest.id ? { ...guest, cardStatus: "SENT" } : guest)),
+            )
+          }
+        />
       )}
     </div>
   );

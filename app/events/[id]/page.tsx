@@ -31,6 +31,7 @@ interface EventInfo {
   guestCount: number;
   quotedAmount: number | string;
   paymentInstructions: string | null;
+  cardTemplateId: string | null;
   pricingTier: { id: string; minGuests: number; maxGuests: number; price: number } | null;
   payments: { id: string; status: string; amount: number | string; currency: string; rejectionReason: string | null }[];
 }
@@ -59,6 +60,15 @@ export default function EventWorkspacePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // E-Card design assignment (spec Step 8).
+  const [templates, setTemplates] = useState<{ id: string; title: string }[]>([]);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  const [templatesError, setTemplatesError] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [savingDesign, setSavingDesign] = useState(false);
+  const [designNotice, setDesignNotice] = useState("");
+  const [designError, setDesignError] = useState("");
+
   const load = useCallback(async () => {
     // The two requests are independent — fire them together instead of
     // waiting for the event before asking for guests (halves load time).
@@ -72,6 +82,7 @@ export default function EventWorkspacePage() {
     ]);
     if (!res.ok) throw new Error(data.error || "Failed to load the event");
     setEvent(data);
+    setSelectedTemplateId(data.cardTemplateId ?? "");
     if (data.status === "AUTHORIZED" && Array.isArray(list)) {
       setGuests(list);
     } else {
@@ -95,6 +106,34 @@ export default function EventWorkspacePage() {
       cancelled = true;
     };
   }, [eventId, load]);
+
+  // Card designs are only needed on the Event details tab — load them lazily
+  // so opening the workspace costs no extra roundtrip.
+  useEffect(() => {
+    if (tab !== "details" || templatesLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/templates", { credentials: "include" });
+        const data = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (res.ok && Array.isArray(data)) {
+          setTemplates(data);
+        } else {
+          setTemplatesError("Could not load card designs. Refresh the page to try again.");
+        }
+        setTemplatesLoaded(true);
+      } catch {
+        if (!cancelled) {
+          setTemplatesError("Could not load card designs. Check your connection and refresh.");
+          setTemplatesLoaded(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, templatesLoaded]);
 
   if (loading) {
     return (
@@ -120,6 +159,29 @@ export default function EventWorkspacePage() {
   const percent = total > 0 ? Math.round((attended / total) * 100) : 0;
   const capacity = event.pricingTier?.maxGuests ?? null;
   const payment = event.payments[0];
+
+  async function saveDesign(templateId: string) {
+    if (!templateId) return;
+    setSavingDesign(true);
+    setDesignNotice("");
+    setDesignError("");
+    try {
+      const res = await fetch(`/api/events/${eventId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ cardTemplateId: templateId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not save the card design");
+      setEvent((prev) => (prev ? { ...prev, cardTemplateId: templateId } : prev));
+      setDesignNotice("Card design saved. New cards will use it.");
+    } catch (err) {
+      setDesignError(err instanceof Error ? err.message : "Could not save the card design");
+    } finally {
+      setSavingDesign(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-6 md:p-10">
@@ -258,6 +320,75 @@ export default function EventWorkspacePage() {
                   Payment page &rarr;
                 </Link>
               )}
+            </section>
+
+            <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm lg:col-span-2">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">E-Card design</h2>
+                  <p className="mt-1 text-sm text-gray-500">
+                    The administrator&apos;s design is combined with each guest&apos;s name and personal QR code to produce a
+                    downloadable PNG card.
+                  </p>
+                </div>
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                  {selectedTemplateId
+                    ? `Selected: ${templates.find((t) => t.id === selectedTemplateId)?.title ?? "Assigned design"}`
+                    : "No design assigned"}
+                </span>
+              </div>
+
+              {templates.length === 0 ? (
+                <p className="mt-4 rounded-lg border border-dashed border-gray-200 bg-gray-50 p-6 text-center text-sm text-gray-500">
+                  {templatesError ||
+                    (templatesLoaded
+                      ? "No card designs have been published yet. Ask the administrator to upload one in Card designs."
+                      : "Loading card designs...")}
+                </p>
+              ) : (
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  {templates.map((template) => {
+                    const active = selectedTemplateId === template.id;
+                    return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTemplateId(template.id);
+                          setDesignNotice("");
+                          setDesignError("");
+                        }}
+                        className={`overflow-hidden rounded-lg border text-left transition ${
+                          active
+                            ? "border-blue-500 ring-2 ring-blue-100"
+                            : "border-gray-200 hover:border-blue-300"
+                        }`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/api/templates/${template.id}/image`}
+                          alt={template.title}
+                          className="h-36 w-full object-cover"
+                        />
+                        <span className="block px-3 py-2 text-sm font-semibold text-gray-800">{template.title}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => saveDesign(selectedTemplateId)}
+                  disabled={!selectedTemplateId || selectedTemplateId === event.cardTemplateId || savingDesign}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingDesign ? "Saving..." : "Save design"}
+                </button>
+                {designNotice && <span className="text-sm font-medium text-emerald-600">{designNotice}</span>}
+                {designError && <span className="text-sm font-medium text-red-600">{designError}</span>}
+              </div>
             </section>
           </div>
         )}

@@ -78,6 +78,25 @@ export async function PATCH(request: Request, { params }: RouteContext) {
       updates.startsAt = startsAt;
     }
 
+    if (body.cardTemplateId !== undefined) {
+      if (body.cardTemplateId === null || body.cardTemplateId === "") {
+        updates.cardTemplateId = null;
+      } else {
+        const cardTemplateId = String(body.cardTemplateId);
+        const design = await prisma.cardTemplate.findFirst({
+          where: { id: cardTemplateId, status: "ACTIVE" },
+          select: { id: true },
+        });
+        if (!design) {
+          return NextResponse.json(
+            { error: "That card design is not available. Pick an active design." },
+            { status: 400 },
+          );
+        }
+        if (design.id !== event.cardTemplateId) updates.cardTemplateId = design.id;
+      }
+    }
+
     let payment = await prisma.payment.findFirst({
       where: { eventId: event.id },
       orderBy: { createdAt: "desc" },
