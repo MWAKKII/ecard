@@ -35,7 +35,26 @@ export interface GuestRow {
 export interface CreateGuestsResult {
   created: number;
   skipped: { row: number; reason: string }[];
+  /** Internal-only: used to prepare each new guest's card. Never serialized. */
+  guestIds: string[];
 }
+
+/**
+ * Fields safe to send back to the browser. qrToken stays server-side (the QR
+ * image endpoint resolves it), and cardPng/cardFingerprint are server caches.
+ */
+export const GUEST_PUBLIC_SELECT = {
+  id: true,
+  fullName: true,
+  email: true,
+  phone: true,
+  whatsapp: true,
+  cardType: true,
+  cardStatus: true,
+  plusOnes: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
 
 const MAX_NAME_LENGTH = 120;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -143,11 +162,13 @@ export async function createGuestsForEvent(
     rows.push(validated.row);
   });
 
-  if (rows.length > 0) {
-    await prisma.guest.createMany({
-      data: rows.map((row) => ({ eventId, ...row })),
-    });
-  }
+  const createdRows =
+    rows.length > 0
+      ? await prisma.guest.createManyAndReturn({
+          data: rows.map((row) => ({ eventId, ...row })),
+          select: { id: true },
+        })
+      : [];
 
-  return { created: rows.length, skipped };
+  return { created: createdRows.length, skipped, guestIds: createdRows.map((row) => row.id) };
 }

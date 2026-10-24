@@ -174,7 +174,17 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to add guest");
-      setNotice(`"${data.fullName}" added. Their QR ticket has been issued.`);
+      if (data.cardGenerated === true || data.cardStatus === "GENERATED") {
+        setNotice(`"${data.fullName}" added — their personalized card is ready.`);
+      } else if (!event?.cardTemplateId) {
+        setNotice(
+          `"${data.fullName}" added. Their QR ticket has been issued; choose an E-Card design to generate their card.`,
+        );
+      } else {
+        setNotice(
+          `"${data.fullName}" added, but the card could not be prepared yet — open Card to retry.`,
+        );
+      }
       setName("");
       setPhone("");
       setWhatsapp("");
@@ -203,8 +213,14 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Import failed");
       const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+      const cards = Number(data.cardsGenerated) || 0;
       setImportResult(
         `Imported ${data.created} guest${data.created === 1 ? "" : "s"}` +
+          (cards > 0
+            ? ` — ${cards} personalized card${cards === 1 ? "" : "s"} ready`
+            : event?.cardTemplateId
+              ? " — cards will be prepared when opened"
+              : " — choose an E-Card design to generate cards") +
           (skipped.length ? `, skipped ${skipped.length}: ${skipped[0].reason}` : ""),
       );
       await loadData();

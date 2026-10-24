@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getSession, getOwnedEvent } from "@/lib/session";
-import { cleanPhone, CARD_TYPES } from "@/lib/guests";
+import { cleanPhone, CARD_TYPES, GUEST_PUBLIC_SELECT } from "@/lib/guests";
+import { generateCardsForGuests } from "@/lib/card-generation";
 import { recordAudit, clientIp } from "@/lib/audit";
 
 type RouteContext = { params: Promise<{ id: string; guestId: string }> };
@@ -27,9 +29,20 @@ async function loadContext(eventId: string, guestId: string) {
     };
   }
 
+  // Deliberately avoid cardPng/qrToken here: they are large/private and this
+  // context is only used for validation, auditing and attendance checks.
   const guest = await prisma.guest.findFirst({
     where: { id: guestId, eventId },
-    include: { attendances: true },
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      whatsapp: true,
+      email: true,
+      cardType: true,
+      cardStatus: true,
+      attendances: true,
+    },
   });
   if (!guest) return { error: NextResponse.json({ error: "Guest not found" }, { status: 404 }) };
 
@@ -123,7 +136,17 @@ export async function PATCH(request: Request, { params }: RouteContext) {
       return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
     }
 
-    const updated = await prisma.guest.update({ where: { id: guestId }, data: updates });
+    // The card prints the guest's name and quality, so those edits invalidate
+    // the cached PNG. Re-render immediately (a SENT card keeps its SENT state).
+    const refreshCard = updates.fullName !== undefined || updates.cardType !== undefined;
+    const updated = await prisma.guest.update({
+      where: { id: guestId },
+      data: {
+        ...updates,
+        ...(refreshCard ? { cardPng: null, cardFingerprint: null } : {}),
+      } as Prisma.GuestUpdateInput,
+      select: GUEST_PUBLIC_SELECT,
+    });
 
     await recordAudit({
       actorId: session.userId,
@@ -133,6 +156,15 @@ export async function PATCH(request: Request, { params }: RouteContext) {
       metadata: { eventId, before, after: updates },
       ipAddress: clientIp(request),
     });
+
+    if (refreshCard) {
+      await generateCardsForGuests(eventId, [guestId]);
+      const refreshed = await prisma.guest.findUnique({
+        where: { id: guestId },
+        select: GUEST_PUBLIC_SELECT,
+      });
+      return NextResponse.json(refreshed ?? updated);
+    }
 
     return NextResponse.json(updated);
   } catch (error) {

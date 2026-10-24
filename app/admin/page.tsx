@@ -43,12 +43,33 @@ async function encodeForStorage(file: File): Promise<string> {
   return dataUrl;
 }
 
+interface TemplateLayoutSummary {
+  placeholders?: {
+    eventTitle?: unknown;
+    guestName?: unknown;
+    quality?: unknown;
+    qr?: unknown;
+  };
+}
+
 interface Template {
   id: string;
   title: string;
   imageUrl: string;
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  layout?: TemplateLayoutSummary | null;
   _count?: { events: number };
+}
+
+/** Human-readable list of the placeholders detected on a design. */
+function detectedPlaceholders(template: Pick<Template, "layout">): string[] {
+  const placeholders = template.layout?.placeholders;
+  const labels: string[] = [];
+  if (placeholders?.eventTitle) labels.push("event title");
+  if (placeholders?.guestName) labels.push("guest name");
+  if (placeholders?.quality) labels.push("card quality");
+  if (placeholders?.qr) labels.push("QR code");
+  return labels;
 }
 
 export default function AdminDesignsPage() {
@@ -111,14 +132,24 @@ export default function AdminDesignsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: designTitle, imageUrl: designFile.dataUrl }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string; template?: { title?: string } };
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        template?: { title?: string; layout?: TemplateLayoutSummary | null };
+      };
       if (!res.ok) {
         setDesignError(data.error || "Failed to publish the design");
         return;
       }
       setDesignTitle("");
       setDesignFile(null);
-      setActionNotice(`"${data.template?.title ?? designTitle.trim()}" was published.`);
+      const detected = data.template ? detectedPlaceholders(data.template) : [];
+      setActionNotice(
+        `"${data.template?.title ?? designTitle.trim()}" was published${
+          detected.length > 0
+            ? ` — detected ${detected.join(", ")}. New guest cards will personalize automatically.`
+            : "."
+        }`,
+      );
       fetchTemplates();
     } catch {
       setDesignError("Unable to connect to the design service.");
@@ -148,6 +179,7 @@ export default function AdminDesignsPage() {
 
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? null;
   const selectedUsage = selectedTemplate?._count?.events ?? 0;
+  const selectedPlaceholders = selectedTemplate ? detectedPlaceholders(selectedTemplate) : [];
 
   return (
     <div className="space-y-6">
@@ -270,6 +302,22 @@ export default function AdminDesignsPage() {
                   </button>
                 )}
               </div>
+
+              {selectedPlaceholders.length > 0 ? (
+                <p className="mt-2 rounded-md border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-emerald-700">
+                  Placeholders detected: {selectedPlaceholders.join(", ")}. New guest cards will
+                  replace these automatically.
+                </p>
+              ) : selectedTemplate.layout ? (
+                <p className="mt-2 rounded-md border border-blue-200 bg-white px-2.5 py-1.5 text-[11px] text-blue-700">
+                  No placeholder words were found. Cards use the standard overlay layout.
+                </p>
+              ) : (
+                <p className="mt-2 rounded-md border border-blue-200 bg-white px-2.5 py-1.5 text-[11px] text-blue-700">
+                  Placeholder analysis has not run for this older design yet — it runs automatically
+                  the first time a card is generated.
+                </p>
+              )}
 
               {confirmDelete && (
                 <div className="mt-3 rounded-lg border border-red-200 bg-white p-3">

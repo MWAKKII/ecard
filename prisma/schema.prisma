@@ -111,6 +111,10 @@ model CardTemplate {
   id          String   @id @default(uuid()) @db.Uuid
   title       String
   imageUrl    String
+  // Detected personalization placeholders (normalized pixel boxes, colors).
+  // Null means no placeholders were found — the renderer uses its legacy
+  // fallback layout (bottom band + QR badge).
+  layout      Json?
   status      TemplateStatus @default(DRAFT)
   createdById String   @db.Uuid
   createdAt   DateTime @default(now())
@@ -181,6 +185,10 @@ model Guest {
   cardStatus CardStatus @default(PENDING)
   // Opaque, server-generated ticket identity. Never contains guest PII.
   qrToken    String     @unique
+  // Pre-generated PNG so a card is ready as soon as the guest is added.
+  // Never selected by guest list responses; kept in sync via fingerprint.
+  cardPng         Bytes?
+  cardFingerprint String?
   plusOnes   Int        @default(0)
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt

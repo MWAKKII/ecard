@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, getOwnedEvent } from "@/lib/session";
-import { validateGuestRow } from "@/lib/guests";
+import { GUEST_PUBLIC_SELECT, validateGuestRow } from "@/lib/guests";
+import { generateCardsForGuests } from "@/lib/card-generation";
 import { recordAudit, clientIp } from "@/lib/audit";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -131,18 +132,38 @@ export async function POST(request: Request, { params }: RouteContext) {
       );
     }
 
-    const guest = await prisma.guest.create({ data: { eventId, ...validated.row } });
+    const guest = await prisma.guest.create({
+      data: { eventId, ...validated.row },
+      select: GUEST_PUBLIC_SELECT,
+    });
+
+    // Prepare the personalized card immediately with the event's selected,
+    // active design. A rendering failure must not lose the guest — the card
+    // endpoint will retry, and the guest simply stays PENDING.
+    const cards = await generateCardsForGuests(eventId, [guest.id]);
+    const created = await prisma.guest.findUnique({
+      where: { id: guest.id },
+      select: GUEST_PUBLIC_SELECT,
+    });
 
     await recordAudit({
       actorId: session.userId,
       action: "guest.created",
       entityType: "guest",
       entityId: guest.id,
-      metadata: { eventId, fullName: guest.fullName, cardType: guest.cardType },
+      metadata: {
+        eventId,
+        fullName: guest.fullName,
+        cardType: guest.cardType,
+        cardGenerated: cards.generated > 0,
+      },
       ipAddress: clientIp(request),
     });
 
-    return NextResponse.json(guest, { status: 201 });
+    return NextResponse.json(
+      { ...(created ?? guest), cardGenerated: cards.generated > 0 },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Guest creation error:", error);
     return NextResponse.json({ error: "Unable to create guest" }, { status: 500 });

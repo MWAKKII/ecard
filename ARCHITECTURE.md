@@ -97,6 +97,7 @@ CardTemplate (card_templates)
 ├── id: UUID (PK)
 ├── title: String
 ├── imageUrl: String                            (base64 data URL of the uploaded design image)
+├── layout: Json?                               (OCR-detected placeholder boxes/colors; null = fallback layout)
 ├── status: TemplateStatus (DRAFT, ACTIVE, ARCHIVED)
 ├── createdById: UUID (FK)
 ├── createdAt: DateTime
@@ -154,6 +155,8 @@ Guest (guests)
 ├── cardType: CardType (STANDARD, PREMIUM)
 ├── cardStatus: CardStatus (PENDING, GENERATED, SENT)
 ├── qrToken: String (unique — opaque, server-issued, never in list responses)
+├── cardPng: Bytes?                             (pre-generated personalized PNG cache)
+├── cardFingerprint: String?                    (design/layout/event/guest fingerprint)
 ├── plusOnes: Int
 ├── createdAt: DateTime
 ├── updatedAt: DateTime
@@ -496,33 +499,50 @@ AuditLog (audit_logs)
 ### Personalized E-Card Rendering (Step 8)
 
 ```
- Admin uploads a design        Event owner assigns it        Guest list → "Card"
- (Card designs page)  ───────► (Event details tab)   ───────► (preview dialog)
+ Admin uploads a design         Event owner assigns it        Add guest / CSV import
+ (Card designs page)  ───────► (Event details tab)   ───────► (guest API)
          │                            │                            │
          ▼                            ▼                            ▼
- card_templates.imageUrl      events.cardTemplateId      GET /api/events/[id]/guests/
- (base64 in DB, served as                                      [guestId]/card
- binary to organizers)                                              │
+ card_templates.layout        events.cardTemplateId      generateCardsForGuests()
+ (OCR boxes/colors;                                        guest.cardPng cache
+ cached on guest row)                                              │
                                                                     ▼
                                                    sharp compositing, native template size:
-                                                     template + bottom gradient + name
-                                                     + event title + white QR box
+                                                     event title + guest name + quality
+                                                     + guest QR (opaque token)
                                                                     │
                                                                     ▼
-                                                     image/png → Download / WhatsApp
+                                                     cached PNG → Download / WhatsApp
 ```
 
 Rules:
 
-- The PNG contains only the guest name, the event title and the guest's opaque
-  `qrToken`; the token is 32 random base64url characters and never encodes
-  personal data. The server resolves it back to the guest record.
+- The PNG contains the event title, guest name, card quality (`Standard` /
+  `Premium`) and the guest's opaque `qrToken`; the token is 32 random
+  base64url characters and never encodes personal data. The server resolves it
+  back to the guest record.
+- Each design is analyzed once with OCR (tesseract.js) at upload time. The
+  literal words `TITLE EVENT`, `Guests name` and `card quality`, plus the white
+  QR panel, are stored as normalized boxes/colors in `card_templates.layout`.
+  Older designs are analyzed lazily on the first card render; a design with no
+  detected placeholders is stored as an empty marker and uses the fallback.
+- Text areas are erased by rebuilding each row from the template's own pixels
+  just left and right of the placeholder (horizontal edge colors), so the
+  design's gradients blend seamlessly. The QR is composited inside the detected
+  white panel. If no placeholders were detected, the renderer falls back to the
+  legacy bottom band + QR badge layout, so any uploaded design still works.
+- New guests are prepared immediately: single add and CSV import call
+  `generateCardsForGuests()` and store the PNG in `guest.cardPng` with a
+  fingerprint. Concurrent renders are capped at 4; a failed render leaves that
+  guest `PENDING` without failing the add/import.
+- `GET .../card` serves the cached PNG when the fingerprint still matches, and
+  re-renders when the design image, detected layout, event title, guest
+  name/quality or QR token changes. A renderer code change is covered by the
+  fingerprint's render version. The response is private (`Cache-Control:
+  private, no-store`) and requires the event owner.
 - Rendering requires the event owner, an `AUTHORIZED` event and an `ACTIVE`
-  assigned design. First render moves the guest's card from `PENDING` to
-  `GENERATED`; delivery moves it to `SENT`.
-- Layout is template-agnostic: a dark gradient across the bottom keeps text
-  readable on any design and the QR is placed in a white rounded square so it
-  stays scannable. Output stays at the template's native dimensions.
+  assigned design. Rendering moves the guest's card from `PENDING` to
+  `GENERATED`; delivery moves it to `SENT` (never downgraded by a later render).
 - `?download=1` returns `Content-Disposition: attachment`; without it the PNG is
   inline for the preview dialog.
 - WhatsApp delivery uses the Web Share API with the actual PNG file when the
@@ -575,15 +595,17 @@ app/api/
 │       ├── pay/
 │       │   └── route.ts      (POST - Submit event payment)
 │       └── guests/
-│           ├── route.ts      (GET - List guests (qrToken excluded), POST - Add guest
-│           │                  capped at the event's pricing-tier maxGuests)
+│           ├── route.ts      (GET - List guests (qrToken/cardPng excluded), POST - Add
+│           │                  guest + immediately render their card, capped at the
+│           │                  event's pricing-tier maxGuests)
 │           ├── import/
-│           │   └── route.ts  (POST - Bulk CSV import, tier capacity enforced)
+│           │   └── route.ts  (POST - Bulk CSV import; renders each new card, tier capacity enforced)
 │           └── [guestId]/
-│               ├── route.ts  (PATCH - Update guest, DELETE - Remove guest)
+│               ├── route.ts  (PATCH - Update guest; name/quality re-render the card, DELETE - Remove guest)
 │               ├── card/
-│               │   └── route.ts (GET - Personalized PNG: template + name + QR,
-│               │                  ?download=1 for attachment; flips PENDING→GENERATED)
+│               │   └── route.ts (GET - Cached personalized PNG: detected layout + title
+│               │                  + name + quality + QR; ?download=1; re-renders on
+│               │                  fingerprint change; flips PENDING→GENERATED)
 │               └── qr/
 │                   └── route.ts (GET - QR token PNG, authorized event owner only)
 │
@@ -725,11 +747,17 @@ lib/
 │                            entity, metadata and client IP)
 ├── qr.ts                   (generateQrToken() - 32-char base64url from 192
 │                            random bits; renderQrPng() - server-side PNG)
-├── card-render.ts          (renderGuestCard() - sharp compositor: template
-│                            + guest name + event title + QR PNG; template-
-│                            agnostic layout, PNG output at native size)
+├── card-render.ts          (renderGuestCard() - sharp compositor guided by
+│                            the detected layout: rebuilds text backgrounds
+│                            from template edge pixels, adds title/name/quality
+│                            + QR; legacy fallback when no placeholders)
+├── card-generation.ts      (resolveTemplateLayout(), buildCardFingerprint(),
+│                            generateCardsForGuests() - cached PNG + concurrency)
+├── template-layout.ts      (analyzeTemplateLayout() - tesseract.js OCR, white
+│                            QR-panel flood fill, layout parsing/validation)
 ├── guests.ts               (Step 8 guest validation, duplicate detection and
-│                            batch creation; tokens issued exactly once)
+│                            batch creation; tokens issued exactly once; public
+│                            select excludes qrToken/cardPng)
 ├── events.ts               (Server-side price quoting from active tiers,
 │                            event ownership/status helpers)
 └── prisma.ts               (Prisma client singleton)
@@ -793,6 +821,9 @@ Notes:
 - `remove_card_template_price_description` drops card_templates.price and
   card_templates.description — designs are now plain image uploads
   (drag & drop from the admin dashboard).
+- `card_layout_and_generated_cards` adds `card_templates.layout` (JSONB) for
+  OCR-detected placeholders and `guests.cardPng` / `guests.cardFingerprint` for
+  the pre-generated card cache.
 - Apply with `npx prisma migrate deploy` once the Supabase credentials in
   .env are valid. Run `npx prisma migrate status` first: databases previously
   shaped by `prisma db push` will show a different history, and
@@ -850,12 +881,23 @@ Notes:
 7. **Personalized E-Card PNG (Step 8)**
    - Event owner assigns an admin-published design from the Event details tab
      (`PATCH /api/events/[id]` → `cardTemplateId`, ACTIVE designs only)
-   - Server renders each card on demand with sharp: template + guest name +
-     event title + the guest's opaque QR token, always as PNG
-   - Layout is template-agnostic (bottom gradient, auto-shrinking name, white
-     QR pane) so any uploaded design stays readable and scannable
-   - Owner-only, AUTHORIZED-event-only endpoint; rendering flips the guest's
-     card status `PENDING → GENERATED`, delivery marks it `SENT`
+   - The design is analyzed once with tesseract.js OCR: the literal
+     `TITLE EVENT`, `Guests name` and `card quality` words plus the white QR
+     panel become normalized boxes/colors in `card_templates.layout`; older
+     designs are analyzed lazily on first use, and a no-placeholder design uses
+     the fallback layout
+   - Adding a guest (single or CSV import) immediately renders their card with
+     the event title, guest name, `Standard`/`Premium` quality and opaque QR,
+     then caches the PNG in `guest.cardPng` with a fingerprint
+   - Erased text rows are rebuilt from the template's own left/right edge
+     pixels, so the design's gradients blend seamlessly; the QR is placed
+     inside the detected white panel. With no detected placeholders the
+     renderer falls back to the legacy bottom band + QR badge
+   - `GET .../card` serves the cached PNG when the fingerprint matches and
+     re-renders when the design, layout, event title, guest details or quality
+     change; owner-only and AUTHORIZED-event-only
+   - Rendering flips the guest's card status `PENDING → GENERATED`; delivery
+     marks it `SENT` (a later re-render never downgrades it)
    - Download as an attachment or send via WhatsApp (Web Share file where
      supported; otherwise PNG download + pre-filled `wa.me` chat)
    - QR content is only the random token — no editable personal data; the

@@ -17,6 +17,7 @@ interface CardGuest {
   fullName: string;
   phone: string | null;
   whatsapp: string | null;
+  cardType: "STANDARD" | "PREMIUM";
 }
 
 export default function GuestCardDialog({
@@ -133,7 +134,18 @@ export default function GuestCardDialog({
             <p className="text-xs font-bold uppercase tracking-wider text-blue-600">Personalized e-card</p>
             <h2 className="mt-1 text-xl font-bold text-gray-900">{guest.fullName}</h2>
             <p className="mt-1 text-sm text-gray-500">{eventTitle}</p>
-            {templateTitle && <p className="mt-0.5 text-xs text-gray-400">Design: {templateTitle}</p>}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span
+                className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                  guest.cardType === "PREMIUM"
+                    ? "bg-purple-100 text-purple-700"
+                    : "bg-gray-100 text-gray-600"
+                }`}
+              >
+                {guest.cardType === "PREMIUM" ? "Premium" : "Standard"} card
+              </span>
+              {templateTitle && <span className="text-xs text-gray-400">Design: {templateTitle}</span>}
+            </div>
           </div>
 
           <p className="text-sm text-gray-600">

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/session";
+import { analyzeTemplateLayout, type TemplateLayout } from "@/lib/template-layout";
 
 /**
  * Card design templates (Step 10 groundwork).
@@ -84,12 +86,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "That file does not look like a valid image" }, { status: 400 });
     }
 
+    // Read the design's placeholder words once, at upload time. A design
+    // without placeholders still gets an empty layout marker, so renders never
+    // have to retry OCR.
+    let layout: TemplateLayout | null = null;
+    try {
+      layout = await analyzeTemplateLayout(imageUrl);
+    } catch (error) {
+      console.error("Template layout analysis failed; using fallback layout:", error);
+    }
+
     const newTemplate = await prisma.cardTemplate.create({
       data: {
         title,
         imageUrl,
         status: "ACTIVE",
         createdById: admin.userId,
+        ...(layout ? { layout: layout as unknown as Prisma.InputJsonValue } : {}),
       },
     });
 

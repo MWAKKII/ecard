@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, getOwnedEvent } from "@/lib/session";
 import { createGuestsForEvent, GuestInput } from "@/lib/guests";
+import { generateCardsForGuests } from "@/lib/card-generation";
 import { recordAudit, clientIp } from "@/lib/audit";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -79,16 +80,29 @@ export async function POST(request: Request, { params }: RouteContext) {
 
     const result = await createGuestsForEvent(eventId, rows);
 
+    // Prepare a card for every newly imported guest, using the event's
+    // selected design. Individual render failures leave that guest PENDING
+    // without failing the import.
+    const cards = await generateCardsForGuests(eventId, result.guestIds);
+
     await recordAudit({
       actorId: session.userId,
       action: "guests.imported",
       entityType: "event",
       entityId: eventId,
-      metadata: { rawRows: rawRowCount, created: result.created, skipped: result.skipped.length },
+      metadata: {
+        rawRows: rawRowCount,
+        created: result.created,
+        skipped: result.skipped.length,
+        cardsGenerated: cards.generated,
+      },
       ipAddress: clientIp(request),
     });
 
-    return NextResponse.json(result, { status: 201 });
+    return NextResponse.json(
+      { created: result.created, skipped: result.skipped, cardsGenerated: cards.generated },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Guest import error:", error);
     return NextResponse.json({ error: "Unable to import guests" }, { status: 500 });
