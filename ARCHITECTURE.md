@@ -557,8 +557,11 @@ app/api/
 │   ├── pricing/
 │   │   └── route.ts          (GET/POST/PATCH - Tier CRUD, overlap validation, active toggle; admin only)
 │   ├── templates/
-│   │   └── route.ts          (GET - List designs, admin only; POST - Upload design
-│   │                          image as a data URL, created ACTIVE)
+│   │   ├── route.ts          (GET - List designs incl. event usage counts, admin
+│   │   │                      only; POST - Upload design image, created ACTIVE)
+│   │   └── [id]/
+│   │       └── route.ts      (DELETE - Remove a design; event assignments SetNull,
+│   │                          audited as template.deleted)
 │   └── users/
 │       └── route.ts          (GET - Users + owned-data counts; PATCH - role/authorization; DELETE - remove unused account)
 │
@@ -819,6 +822,10 @@ Notes:
      a base64 data URL in `card_templates.imageUrl` — client-side downscaling
      keeps uploads small; the API validates type, magic bytes and a 4 MB cap
    - Uploads are created `ACTIVE` and immediately selectable by organizers
+   - The admin gallery is selectable: choose a design to see how many events
+     use it and delete it with an inline confirmation
+   - Deletion is audited (`template.deleted`); event assignments are cleared by
+     the `onDelete: SetNull` relation, so affected events must pick a new design
    - Admin-controlled template library
 
 5. **Audit Trail**

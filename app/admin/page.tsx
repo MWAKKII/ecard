@@ -47,6 +47,8 @@ interface Template {
   id: string;
   title: string;
   imageUrl: string;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  _count?: { events: number };
 }
 
 export default function AdminDesignsPage() {
@@ -56,6 +58,11 @@ export default function AdminDesignsPage() {
   const [dragging, setDragging] = useState(false);
   const [designError, setDesignError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [actionNotice, setActionNotice] = useState("");
+  const [actionError, setActionError] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -104,13 +111,14 @@ export default function AdminDesignsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: designTitle, imageUrl: designFile.dataUrl }),
       });
-      const data = await res.json().catch(() => ({}) as Record<string, string>);
+      const data = (await res.json().catch(() => ({}))) as { error?: string; template?: { title?: string } };
       if (!res.ok) {
         setDesignError(data.error || "Failed to publish the design");
         return;
       }
       setDesignTitle("");
       setDesignFile(null);
+      setActionNotice(`"${data.template?.title ?? designTitle.trim()}" was published.`);
       fetchTemplates();
     } catch {
       setDesignError("Unable to connect to the design service.");
@@ -118,6 +126,28 @@ export default function AdminDesignsPage() {
       setLoading(false);
     }
   }
+
+  async function handleDelete(template: Template) {
+    setDeleting(true);
+    setActionError("");
+    setActionNotice("");
+    try {
+      const res = await fetch(`/api/admin/templates/${template.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not delete the design");
+      setTemplates((prev) => prev.filter((item) => item.id !== template.id));
+      setSelectedTemplateId(null);
+      setConfirmDelete(false);
+      setActionNotice(`"${template.title}" was deleted.`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not delete the design");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? null;
+  const selectedUsage = selectedTemplate?._count?.events ?? 0;
 
   return (
     <div className="space-y-6">
@@ -166,8 +196,122 @@ export default function AdminDesignsPage() {
           </form>
         </section>
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="mb-6"><h2 className="text-lg font-bold text-gray-900">Published designs</h2><p className="mt-1 text-sm text-gray-500">{templates.length} template{templates.length === 1 ? "" : "s"} available</p></div>
-          {templates.length === 0 ? <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-8 text-center text-sm text-gray-500">No templates uploaded yet.</p> : <div className="grid gap-3 sm:grid-cols-2">{templates.map((template) => <article key={template.id} className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50"><img src={template.imageUrl} alt={template.title} className="h-32 w-full object-cover" /><div className="p-3"><h3 className="truncate text-sm font-bold text-gray-900">{template.title}</h3></div></article>)}</div>}
+          <div className="mb-6"><h2 className="text-lg font-bold text-gray-900">Published designs</h2><p className="mt-1 text-sm text-gray-500">{templates.length} template{templates.length === 1 ? "" : "s"} available — select one to manage it</p></div>
+          {templates.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-8 text-center text-sm text-gray-500">No templates uploaded yet.</p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {templates.map((template) => {
+                const selected = template.id === selectedTemplateId;
+                return (
+                  <button
+                    key={template.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => {
+                      setSelectedTemplateId(selected ? null : template.id);
+                      setConfirmDelete(false);
+                      setActionNotice("");
+                      setActionError("");
+                    }}
+                    className={`overflow-hidden rounded-lg border text-left transition focus:outline-none focus:ring-2 focus:ring-blue-200 ${
+                      selected ? "border-blue-500 ring-2 ring-blue-100" : "border-gray-200 hover:border-blue-300"
+                    }`}
+                  >
+                    <div className="relative">
+                      <img src={template.imageUrl} alt={template.title} className="h-32 w-full object-cover" />
+                      {selected && (
+                        <span className="absolute right-2 top-2 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between gap-2 bg-gray-50 p-3">
+                      <h3 className="truncate text-sm font-bold text-gray-900">{template.title}</h3>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                          template.status === "ACTIVE"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : template.status === "ARCHIVED"
+                              ? "bg-gray-200 text-gray-600"
+                              : "bg-amber-100 text-amber-700"
+                        }`}
+                      >
+                        {template.status}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {selectedTemplate ? (
+            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-blue-900">
+                  <span className="mr-2 text-xs font-bold uppercase tracking-wide text-blue-600">Selected</span>
+                  <span className="font-bold">{selectedTemplate.title}</span>
+                  <span className="ml-2 text-xs text-blue-700">
+                    used by {selectedUsage} event{selectedUsage === 1 ? "" : "s"}
+                  </span>
+                </p>
+                {!confirmDelete && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmDelete(true);
+                      setActionNotice("");
+                      setActionError("");
+                    }}
+                    className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50"
+                  >
+                    Delete design
+                  </button>
+                )}
+              </div>
+
+              {confirmDelete && (
+                <div className="mt-3 rounded-lg border border-red-200 bg-white p-3">
+                  <p className="text-sm font-semibold text-red-700">Delete &quot;{selectedTemplate.title}&quot;?</p>
+                  <p className="mt-1 text-xs text-gray-600">
+                    {selectedUsage === 1
+                      ? "1 event uses this design. It will lose the assignment and must choose another design before new cards can be generated."
+                      : selectedUsage > 1
+                        ? `${selectedUsage} events use this design. They will lose the assignment and must choose another design before new cards can be generated.`
+                        : "This permanently removes the design from the library."}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(selectedTemplate)}
+                      disabled={deleting}
+                      className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {deleting ? "Deleting..." : "Yes, delete design"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(false)}
+                      disabled={deleting}
+                      className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            templates.length > 0 && <p className="mt-4 text-xs text-gray-400">Select a design to manage it.</p>
+          )}
+
+          {actionNotice && (
+            <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">{actionNotice}</p>
+          )}
+          {actionError && (
+            <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{actionError}</p>
+          )}
         </section>
       </div>
     </div>

@@ -35,6 +35,7 @@ export async function GET() {
     if (!(await requireAdmin())) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     const templates = await prisma.cardTemplate.findMany({
       orderBy: { createdAt: "desc" },
+      include: { _count: { select: { events: true } } },
     });
     return NextResponse.json(templates, { status: 200 });
   } catch (error: unknown) {
