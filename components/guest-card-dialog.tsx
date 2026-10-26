@@ -1,23 +1,39 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  DELIVERY_STATUS_BADGE,
+  DELIVERY_STATUS_LABEL,
+  type DeliveryStatusValue,
+} from "@/lib/delivery-status";
 
 /**
- * Personalized card delivery dialog (spec Step 8).
+ * Personalized card delivery dialog.
  *
- * Shows the server-rendered PNG (template + guest name + opaque QR) and offers
- * the two delivery paths the spec asks for: download, or send through
- * WhatsApp. Browsers that support the Web Share API share the actual PNG file
- * straight into WhatsApp; everywhere else the card is downloaded and a
- * WhatsApp chat is opened so the organizer can attach it.
+ * Preview and PNG download are always available to the event owner. WhatsApp
+ * delivery is a server action: the browser never marks a card as sent on its
+ * own, and the button is disabled when the deployment has no provider
+ * credentials configured.
  */
 
-interface CardGuest {
+interface DeliveryState {
+  deliveryStatus: DeliveryStatusValue;
+  deliveredAt: string | null;
+  deliveryError: string | null;
+}
+
+interface CardGuest extends DeliveryState {
   id: string;
   fullName: string;
   phone: string | null;
   whatsapp: string | null;
   cardType: "STANDARD" | "PREMIUM";
+}
+
+interface WhatsAppConfig {
+  configured: boolean;
+  provider: string | null;
+  mode: "template" | "image" | null;
 }
 
 export default function GuestCardDialog({
@@ -26,81 +42,137 @@ export default function GuestCardDialog({
   eventTitle,
   templateTitle,
   onClose,
-  onSent,
+  onDeliveryChange,
 }: {
   eventId: string;
   guest: CardGuest;
   eventTitle: string;
   templateTitle: string | null;
   onClose: () => void;
-  onSent: () => void;
+  onDeliveryChange: (delivery: DeliveryState) => void;
 }) {
-  const [sharing, setSharing] = useState(false);
+  const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [configError, setConfigError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [config, setConfig] = useState<WhatsAppConfig | null>(null);
+  const [delivery, setDelivery] = useState<DeliveryState>({
+    deliveryStatus: guest.deliveryStatus,
+    deliveredAt: guest.deliveredAt,
+    deliveryError: guest.deliveryError,
+  });
 
   const cardUrl = `/api/events/${eventId}/guests/${guest.id}/card`;
   const downloadUrl = `${cardUrl}?download=1`;
-  const fileName = `card-${guest.fullName.replace(/[^\w]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "guest"}.png`;
-  const shareText = `Hi ${guest.fullName}, here is your card for ${eventTitle}.`;
+  const deliveryUrl = `/api/events/${eventId}/guests/${guest.id}/delivery`;
+  const recipient = (guest.whatsapp || guest.phone || "").replace(/\D/g, "");
+  const canSend =
+    config?.configured === true &&
+    recipient.length >= 7 &&
+    recipient.length <= 15 &&
+    !sending;
 
-  async function markSent() {
-    try {
-      await fetch(`/api/events/${eventId}/guests/${guest.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ cardStatus: "SENT" }),
-      });
-      onSent();
-    } catch {
-      /* the card itself is already delivered; status is best-effort */
-    }
-  }
+  // WhatsApp availability is a deployment concern, not a guest concern. Check
+  // it before offering a send action so the UI never implies delivery works
+  // when no provider is configured.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch(deliveryUrl, { credentials: "include", cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!active) return;
+        if (!res.ok) {
+          setConfigError(data.error || "Could not check WhatsApp delivery configuration.");
+          return;
+        }
+        setConfig({
+          configured: data.whatsapp?.configured === true,
+          provider: data.whatsapp?.provider ?? null,
+          mode: data.whatsapp?.mode ?? null,
+        });
+        if (data.delivery) {
+          setDelivery({
+            deliveryStatus: data.delivery.status,
+            deliveredAt: data.delivery.deliveredAt ?? null,
+            deliveryError: data.delivery.error ?? null,
+          });
+        }
+      } catch {
+        if (active) setConfigError("Could not check WhatsApp delivery configuration.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [deliveryUrl]);
 
   async function sendWhatsApp() {
-    setSharing(true);
+    if (!canSend) return;
+    setSending(true);
     setError("");
+    setConfigError("");
     setNotice("");
     try {
-      const res = await fetch(cardUrl, { credentials: "include" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Could not generate the card");
+      const res = await fetch(deliveryUrl, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (data.whatsapp) {
+        setConfig({
+          configured: data.whatsapp.configured === true,
+          provider: data.whatsapp.provider ?? null,
+          mode: data.whatsapp.mode ?? null,
+        });
       }
 
-      const blob = await res.blob();
-      const file = new File([blob], fileName, { type: "image/png" });
-      const nav = navigator as Navigator & { canShare?: (data?: ShareData) => boolean };
+      // Only a server-confirmed SENT counts. Never infer success from an HTTP
+      // 200 alone — a missing status is treated as a failed delivery.
+      const serverStatus: DeliveryStatusValue | undefined =
+        data.delivery?.status ?? data.deliveryStatus;
+      const next: DeliveryState = {
+        deliveryStatus: serverStatus ?? "FAILED",
+        deliveredAt: data.delivery?.deliveredAt ?? data.deliveredAt ?? null,
+        deliveryError:
+          data.delivery?.error ??
+          (serverStatus === "SENT" ? null : data.error || "The provider did not confirm delivery."),
+      };
+      setDelivery(next);
+      onDeliveryChange(next);
 
-      if (typeof nav.share === "function" && nav.canShare?.({ files: [file] })) {
-        await nav.share({ files: [file], text: shareText });
-        setNotice("Card shared. Marked as sent.");
-        await markSent();
-      } else {
-        // No file sharing in this browser: download the PNG, then open the
-        // guest's WhatsApp chat with a ready-made message.
-        const objectUrl = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = objectUrl;
-        link.download = fileName;
-        link.click();
-        URL.revokeObjectURL(objectUrl);
-
-        const digits = (guest.whatsapp || guest.phone || "").replace(/\D/g, "");
-        const chat = digits ? `https://wa.me/${digits}` : "https://wa.me/";
-        window.open(`${chat}?text=${encodeURIComponent(`${shareText} Attach the downloaded card image.`)}`, "_blank", "noopener,noreferrer");
-        setNotice("Card downloaded — attach it to the WhatsApp chat that just opened. Marked as sent.");
-        await markSent();
+      if (!res.ok || serverStatus !== "SENT") {
+        throw new Error(data.error || "The provider did not confirm delivery.");
       }
+
+      setNotice("Card sent through WhatsApp.");
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") return; // user cancelled the share sheet
-      setError(err instanceof Error ? err.message : "Could not send the card");
+      setError(err instanceof Error ? err.message : "The card could not be delivered.");
     } finally {
-      setSharing(false);
+      setSending(false);
     }
   }
+
+  // When the provider is missing and no send has been attempted yet, the
+  // truthful state to show is "not configured", not "sent" or "not sent".
+  const shownStatus: DeliveryStatusValue =
+    config?.configured === false && delivery.deliveryStatus === "NOT_SENT"
+      ? "NOT_CONFIGURED"
+      : delivery.deliveryStatus;
+
+  const sendLabel = sending
+    ? "Sending..."
+    : config === null
+      ? configError
+        ? "WhatsApp unavailable"
+        : "Checking WhatsApp..."
+      : config.configured !== true
+        ? "WhatsApp not configured"
+        : !recipient
+          ? "No WhatsApp number"
+          : "Send via WhatsApp";
 
   return (
     <div
@@ -146,6 +218,15 @@ export default function GuestCardDialog({
               </span>
               {templateTitle && <span className="text-xs text-gray-400">Design: {templateTitle}</span>}
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <span className="font-semibold">Delivery</span>
+              <span className={`rounded-full px-2.5 py-1 font-bold ${DELIVERY_STATUS_BADGE[shownStatus]}`}>
+                {DELIVERY_STATUS_LABEL[shownStatus]}
+              </span>
+              {delivery.deliveredAt && shownStatus === "SENT" && (
+                <span>{new Date(delivery.deliveredAt).toLocaleString()}</span>
+              )}
+            </div>
           </div>
 
           <p className="text-sm text-gray-600">
@@ -163,10 +244,10 @@ export default function GuestCardDialog({
             <button
               type="button"
               onClick={sendWhatsApp}
-              disabled={sharing || !loaded}
-              className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canSend}
+              className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
             >
-              {sharing ? "Preparing..." : "Send through WhatsApp"}
+              {sendLabel}
             </button>
             <button
               type="button"
@@ -177,8 +258,47 @@ export default function GuestCardDialog({
             </button>
           </div>
 
-          {notice && <p className="rounded-lg bg-emerald-50 p-3 text-xs font-medium text-emerald-700">{notice}</p>}
-          {error && <p className="rounded-lg bg-red-50 p-3 text-xs font-medium text-red-700">{error}</p>}
+          {config?.configured === false && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-800">
+              <span className="font-bold">WhatsApp delivery is not configured.</span> No message was sent. Download the
+              PNG and send it manually.
+            </p>
+          )}
+          {config?.configured === true && config.mode === "image" && (
+            <p className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs font-medium text-blue-800">
+              Free-form WhatsApp mode is active. Meta only delivers these messages inside an open 24-hour
+              customer-service window. An approved image template is recommended for normal guest-card delivery.
+            </p>
+          )}
+          {config?.configured === true && !recipient && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-800">
+              This guest has no WhatsApp number, so the card cannot be sent through the provider.
+            </p>
+          )}
+          {config?.configured === true && delivery.deliveryStatus === "NOT_CONFIGURED" && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-800">
+              The previous attempt was blocked because WhatsApp delivery was not configured. It can be retried now.
+            </p>
+          )}
+          {configError && (
+            <p className="rounded-lg bg-amber-50 p-3 text-xs font-medium text-amber-700">{configError}</p>
+          )}
+
+          {notice && (
+            <p className="rounded-lg bg-emerald-50 p-3 text-xs font-medium text-emerald-700" aria-live="polite">
+              {notice}
+            </p>
+          )}
+          {error && (
+            <p className="rounded-lg bg-red-50 p-3 text-xs font-medium text-red-700" aria-live="polite">
+              {error}
+            </p>
+          )}
+          {!error && delivery.deliveryStatus === "FAILED" && delivery.deliveryError && (
+            <p className="rounded-lg bg-red-50 p-3 text-xs font-medium text-red-700">
+              Last delivery attempt: {delivery.deliveryError}
+            </p>
+          )}
         </div>
       </div>
     </div>

@@ -205,6 +205,8 @@ export async function generateCardsForGuests(
       fullName: true,
       cardType: true,
       cardStatus: true,
+      deliveryStatus: true,
+      cardFingerprint: true,
       qrToken: true,
     },
   });
@@ -231,6 +233,11 @@ export async function generateCardsForGuests(
         eventUpdatedAt: event.updatedAt,
         guest,
       });
+      // A delivered card is only current while its fingerprint matches. If the
+      // design/title/guest data changed, the newly rendered card has not been
+      // sent yet, so reset delivery instead of falsely keeping SENT.
+      const resetDelivery =
+        guest.cardFingerprint !== fingerprint && guest.deliveryStatus !== "NOT_SENT";
 
       await prisma.guest.update({
         where: { id: guest.id },
@@ -238,6 +245,15 @@ export async function generateCardsForGuests(
           cardPng: new Uint8Array(png),
           cardFingerprint: fingerprint,
           ...(guest.cardStatus === "PENDING" ? { cardStatus: "GENERATED" as const } : {}),
+          ...(resetDelivery
+            ? {
+                deliveryStatus: "NOT_SENT" as const,
+                deliveredAt: null,
+                deliveryProvider: null,
+                deliveryMessageId: null,
+                deliveryError: null,
+              }
+            : {}),
         },
       });
       return true;

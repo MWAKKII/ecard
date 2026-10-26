@@ -51,11 +51,23 @@ enum CardType {
   PREMIUM
 }
 
-// Generation/delivery state of a guest's personalized E-Card (Step 8 / spec section 7).
+// Generation state of a guest's personalized E-Card (Step 8 / spec section 7).
+// SENT is a legacy value from the old browser-share flow. New deliveries are
+// tracked separately by DeliveryStatus; cardStatus no longer records delivery.
 enum CardStatus {
   PENDING
   GENERATED
   SENT
+}
+
+// WhatsApp delivery state for a guest's personalized E-Card. NOT_SENT is the
+// default; NOT_CONFIGURED means a send was attempted while no provider was
+// configured; FAILED means the configured provider rejected the send.
+enum DeliveryStatus {
+  NOT_SENT
+  NOT_CONFIGURED
+  SENT
+  FAILED
 }
 
 enum AttendanceStatus {
@@ -189,6 +201,13 @@ model Guest {
   // Never selected by guest list responses; kept in sync via fingerprint.
   cardPng         Bytes?
   cardFingerprint String?
+  // WhatsApp delivery is separate from generation: only the provider service
+  // may move this to SENT, and only after the provider confirms the send.
+  deliveryStatus    DeliveryStatus @default(NOT_SENT)
+  deliveredAt       DateTime?
+  deliveryProvider  String?
+  deliveryMessageId String?
+  deliveryError     String?
   plusOnes   Int        @default(0)
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
@@ -199,6 +218,7 @@ model Guest {
   @@unique([eventId, email])
   @@index([eventId])
   @@index([email])
+  @@index([deliveryStatus])
   @@map("guests")
 }
 

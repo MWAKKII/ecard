@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import GuestCardDialog from "@/components/guest-card-dialog";
+import {
+  DELIVERY_STATUS_BADGE,
+  DELIVERY_STATUS_LABEL,
+  type DeliveryStatusValue,
+} from "@/lib/delivery-status";
 
 /**
  * Guest management UI (spec Step 8 / Client Dashboard "Guest List" tab).
@@ -29,6 +34,10 @@ interface Guest {
   whatsapp: string | null;
   cardType: "STANDARD" | "PREMIUM";
   cardStatus: "PENDING" | "GENERATED" | "SENT";
+  deliveryStatus: DeliveryStatusValue;
+  deliveredAt: string | null;
+  deliveryProvider: string | null;
+  deliveryError: string | null;
   plusOnes: number;
   attendances: Attendance[];
 }
@@ -46,6 +55,8 @@ const ATTENDANCE_OPTIONS = ["", "REGISTERED", "CHECKED_IN", "NO_SHOW", "LEFT"];
 function attendanceOf(guest: Guest): string {
   return guest.attendances[0]?.status || "REGISTERED";
 }
+
+
 
 function CapacityMeter({ used, capacity, tierName }: { used: number; capacity: number | null; tierName: string | null }) {
   if (capacity === null) return null;
@@ -391,6 +402,7 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
                   <th className="px-4 py-3 font-semibold">Phone / WhatsApp</th>
                   <th className="px-4 py-3 font-semibold">Card</th>
                   <th className="px-4 py-3 font-semibold">Card status</th>
+                  <th className="px-4 py-3 font-semibold">Delivery</th>
                   <th className="px-4 py-3 font-semibold">Attendance</th>
                   <th className="px-4 py-3 font-semibold">Scan time</th>
                   <th className="px-4 py-3 font-semibold text-right">Actions</th>
@@ -399,7 +411,7 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-gray-400">
+                    <td colSpan={8} className="px-4 py-10 text-center text-gray-400">
                       {guests.length === 0 ? "No guests yet. Add a guest or import a CSV." : "No guests match your filters."}
                     </td>
                   </tr>
@@ -424,11 +436,22 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
                         </td>
                         <td className="px-4 py-3">
                           <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${
-                            guest.cardStatus === "SENT" ? "bg-emerald-100 text-emerald-700"
-                            : guest.cardStatus === "GENERATED" ? "bg-blue-100 text-blue-700"
-                            : "bg-amber-100 text-amber-700"}`}>
-                            {guest.cardStatus}
+                            guest.cardStatus === "PENDING" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
+                            {guest.cardStatus === "PENDING" ? "PENDING" : "READY"}
                           </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            title={guest.deliveryError || undefined}
+                            className={`rounded-full px-2.5 py-1 text-xs font-bold ${DELIVERY_STATUS_BADGE[guest.deliveryStatus]}`}
+                          >
+                            {DELIVERY_STATUS_LABEL[guest.deliveryStatus]}
+                          </span>
+                          {guest.deliveryStatus === "SENT" && guest.deliveredAt && (
+                            <div className="mt-1 text-[11px] text-gray-400">
+                              {new Date(guest.deliveredAt).toLocaleString()}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${
@@ -490,11 +513,14 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
           eventTitle={event.title}
           templateTitle={null}
           onClose={() => setCardGuest(null)}
-          onSent={() =>
+          onDeliveryChange={(delivery) => {
             setGuests((prev) =>
-              prev.map((guest) => (guest.id === cardGuest.id ? { ...guest, cardStatus: "SENT" } : guest)),
-            )
-          }
+              prev.map((guest) => (guest.id === cardGuest.id ? { ...guest, ...delivery } : guest)),
+            );
+            setCardGuest((prev) =>
+              prev && prev.id === cardGuest.id ? { ...prev, ...delivery } : prev,
+            );
+          }}
         />
       )}
     </div>

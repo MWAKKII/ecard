@@ -153,7 +153,12 @@ Guest (guests)
 ├── phone: String?
 ├── whatsapp: String?
 ├── cardType: CardType (STANDARD, PREMIUM)
-├── cardStatus: CardStatus (PENDING, GENERATED, SENT)
+├── cardStatus: CardStatus (PENDING, GENERATED, legacy SENT)
+├── deliveryStatus: DeliveryStatus (NOT_SENT, NOT_CONFIGURED, SENT, FAILED)
+├── deliveredAt: DateTime?                      (set only after provider confirmation)
+├── deliveryProvider: String?                   (e.g. meta-cloud)
+├── deliveryMessageId: String?                  (provider message id)
+├── deliveryError: String?                      (safe failure reason)
 ├── qrToken: String (unique — opaque, server-issued, never in list responses)
 ├── cardPng: Bytes?                             (pre-generated personalized PNG cache)
 ├── cardFingerprint: String?                    (design/layout/event/guest fingerprint)
@@ -542,13 +547,31 @@ Rules:
   private, no-store`) and requires the event owner.
 - Rendering requires the event owner, an `AUTHORIZED` event and an `ACTIVE`
   assigned design. Rendering moves the guest's card from `PENDING` to
-  `GENERATED`; delivery moves it to `SENT` (never downgraded by a later render).
+  `GENERATED`. Delivery state is separate: `deliveryStatus` starts at
+  `NOT_SENT` and only the delivery service can move it to `SENT`.
 - `?download=1` returns `Content-Disposition: attachment`; without it the PNG is
-  inline for the preview dialog.
-- WhatsApp delivery uses the Web Share API with the actual PNG file when the
-  browser supports file sharing. Otherwise the card is downloaded and a
-  `wa.me/<guest phone>` chat opens with a pre-filled message so the organizer can
-  attach the PNG. Both paths mark the guest's card as `SENT` (best-effort).
+  inline for the preview dialog. Preview and download always work for the owner.
+- WhatsApp delivery is server-side only. `POST .../delivery` renders/loads the
+  current PNG and calls `lib/whatsapp-delivery.ts`, which is the sole module
+  that talks to the provider (Meta WhatsApp Cloud API). The guest is marked
+  `SENT` only after the provider returns a message id; `deliveredAt`,
+  `deliveryProvider`, `deliveryMessageId` and `deliveryError` record the result.
+- If `WHATSAPP_ACCESS_TOKEN` or `WHATSAPP_PHONE_NUMBER_ID` is missing, the
+  service returns `NOT_CONFIGURED`, the guest is stored as `NOT_CONFIGURED`,
+  and the dialog disables the send action with "WhatsApp delivery is not
+  configured". It never falls back to `wa.me` or a browser share while claiming
+  the card was sent. Downloading the PNG remains available for manual sending.
+- Provider failures return a non-2xx response and store `FAILED` plus a safe
+  error message. The config GET endpoint only exposes
+  `{ configured, provider, mode }` — never credentials.
+- When `WHATSAPP_TEMPLATE_NAME` is set, the provider uploads the PNG as media
+  and sends an approved template with an image header. Body parameters come from
+  `WHATSAPP_TEMPLATE_BODY_FIELDS` (default `guestName,eventTitle`); use `none`
+  for a template body without variables. The template language defaults to
+  `en_US`. This is required for business-initiated messages.
+- Without a template name the provider falls back to a free-form image message,
+  which Meta only accepts inside an open 24-hour customer-service window. A
+  provider rejection is reported honestly as `FAILED`, never as `SENT`.
 - Design images are never embedded in organizer API responses: the picker calls
   `GET /api/templates` (id + title) and renders thumbnails from
   `GET /api/templates/[id]/image` (binary, private cache).
@@ -606,6 +629,10 @@ app/api/
 │               │   └── route.ts (GET - Cached personalized PNG: detected layout + title
 │               │                  + name + quality + QR; ?download=1; re-renders on
 │               │                  fingerprint change; flips PENDING→GENERATED)
+│               ├── delivery/
+│               │   └── route.ts (GET - Provider availability + delivery state;
+│               │                  POST - Server-side WhatsApp send; SENT only
+│               │                  after provider message id; 503 when unconfigured)
 │               └── qr/
 │                   └── route.ts (GET - QR token PNG, authorized event owner only)
 │
@@ -758,6 +785,10 @@ lib/
 ├── guests.ts               (Step 8 guest validation, duplicate detection and
 │                            batch creation; tokens issued exactly once; public
 │                            select excludes qrToken/cardPng)
+├── whatsapp-delivery.ts    (Only module that calls a WhatsApp provider; config
+│                            detection, Meta Cloud API media + image message,
+│                            strict success only when a message id is returned)
+├── delivery-status.ts      (Shared client-safe delivery labels/badge classes)
 ├── events.ts               (Server-side price quoting from active tiers,
 │                            event ownership/status helpers)
 └── prisma.ts               (Prisma client singleton)
@@ -768,11 +799,12 @@ components/
 ├── guest-manager.tsx        (Guest list UI used by the /events/[id] "Guest list"
 │                             tab and the legacy /events/[id]/guests page: tier
 │                             capacity meter, add form and CSV import disabled at
-│                             capacity, search/filters, scan-time column, gate for
-│                             non-AUTHORIZED events, Card action for delivery)
-└── guest-card-dialog.tsx    (Personalized PNG preview + Download + WhatsApp
-                              delivery; falls back to download + wa.me when the
-                              browser cannot share files)
+│                             capacity, search/filters, scan-time and delivery
+│                             status columns, gate for non-AUTHORIZED events,
+│                             Card action for delivery)
+└── guest-card-dialog.tsx    (Personalized PNG preview + Download + server-side
+                              WhatsApp delivery; checks provider configuration,
+                              shows NOT CONFIGURED, never marks sent locally)
 ```
 
 ## Environment Configuration
@@ -783,11 +815,30 @@ components/
 ├── DIRECT_URL              (Supabase direct connection - used by migrations)
 ├── JWT_SECRET              (>= 32 chars; required in production)
 ├── SEED_ADMIN_EMAIL        (Seed script admin account)
-└── SEED_ADMIN_PASSWORD     (Seed script admin password; seed warns if unset)
+├── SEED_ADMIN_PASSWORD     (Seed script admin password; seed warns if unset)
+├── WHATSAPP_ACCESS_TOKEN   (Optional; Meta Cloud API token for card delivery)
+├── WHATSAPP_PHONE_NUMBER_ID (Optional; Meta Cloud API sender id)
+├── WHATSAPP_API_VERSION    (Optional Graph API version; defaults to v23.0)
+├── WHATSAPP_TEMPLATE_NAME  (Optional approved template; enables template mode)
+├── WHATSAPP_TEMPLATE_LANGUAGE (Optional; defaults to en_US)
+└── WHATSAPP_TEMPLATE_BODY_FIELDS (Optional; guestName,eventTitle or none)
 
 prisma7.config.ts:
 ├── Reads DATABASE_URL / DIRECT_URL from .env
 └── Credentials are kept out of schema.prisma
+
+WhatsApp setup notes:
+- Use a Meta app with the WhatsApp product enabled and a permanent/system-user
+  access token with `whatsapp_business_messaging` permission.
+- `WHATSAPP_PHONE_NUMBER_ID` is the sender phone number id from the app's
+  WhatsApp API setup, not the phone number itself.
+- For business-initiated card delivery create and approve an image-header
+  template. Example body: `Hi {{1}}, here is your card for {{2}}.`
+  Set `WHATSAPP_TEMPLATE_NAME`, and match `WHATSAPP_TEMPLATE_LANGUAGE`.
+- The default body mapping is `guestName,eventTitle`; use
+  `WHATSAPP_TEMPLATE_BODY_FIELDS=none` for a template without body variables.
+- Add test recipients to the Meta app while it is in development mode. Without
+  a template, free-form sends only work inside the 24-hour service window.
 ```
 
 ## Database Migrations
@@ -824,6 +875,11 @@ Notes:
 - `card_layout_and_generated_cards` adds `card_templates.layout` (JSONB) for
   OCR-detected placeholders and `guests.cardPng` / `guests.cardFingerprint` for
   the pre-generated card cache.
+- `card_delivery` adds the separate `DeliveryStatus` enum and
+  `guests.deliveryStatus/deliveredAt/deliveryProvider/deliveryMessageId/
+  deliveryError`. Existing guests start at `NOT_SENT`; the legacy
+  `cardStatus='SENT'` value is deliberately not copied because it came from a
+  browser share, not a provider confirmation.
 - Apply with `npx prisma migrate deploy` once the Supabase credentials in
   .env are valid. Run `npx prisma migrate status` first: databases previously
   shaped by `prisma db push` will show a different history, and
@@ -896,10 +952,17 @@ Notes:
    - `GET .../card` serves the cached PNG when the fingerprint matches and
      re-renders when the design, layout, event title, guest details or quality
      change; owner-only and AUTHORIZED-event-only
-   - Rendering flips the guest's card status `PENDING → GENERATED`; delivery
-     marks it `SENT` (a later re-render never downgrades it)
-   - Download as an attachment or send via WhatsApp (Web Share file where
-     supported; otherwise PNG download + pre-filled `wa.me` chat)
+   - Rendering flips the guest's card status `PENDING → GENERATED`; delivery is
+     tracked separately in `deliveryStatus` and never inferred from a browser
+     share or download
+   - The owner can preview the inline PNG or download it as an attachment at
+     any time
+   - WhatsApp delivery is a server-side provider call (`lib/whatsapp-delivery.ts`).
+     It sends an approved image-header template when `WHATSAPP_TEMPLATE_NAME` is
+     configured, otherwise a free-form image for the open service window.
+     `SENT` requires a provider message id; missing credentials produce
+     `NOT_CONFIGURED`, and provider errors produce `FAILED` with a safe reason.
+     There is no `wa.me` or Web Share fallback that claims a send.
    - QR content is only the random token — no editable personal data; the
      server resolves the token back to the guest record
 

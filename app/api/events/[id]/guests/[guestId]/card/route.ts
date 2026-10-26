@@ -38,6 +38,7 @@ export async function GET(request: Request, { params }: RouteContext) {
         cardType: true,
         qrToken: true,
         cardStatus: true,
+        deliveryStatus: true,
         cardPng: true,
         cardFingerprint: true,
         event: {
@@ -112,8 +113,19 @@ export async function GET(request: Request, { params }: RouteContext) {
         data: {
           cardPng: new Uint8Array(png),
           cardFingerprint: fingerprint,
-          // Never downgrade a card that was already sent.
+          // Generation state is monotonic. Delivery state is independent and
+          // only the provider-confirmed delivery route may set SENT. A new
+          // render means the previously delivered card is no longer current.
           ...(guest.cardStatus === "PENDING" ? { cardStatus: "GENERATED" as const } : {}),
+          ...(guest.deliveryStatus !== "NOT_SENT"
+            ? {
+                deliveryStatus: "NOT_SENT" as const,
+                deliveredAt: null,
+                deliveryProvider: null,
+                deliveryMessageId: null,
+                deliveryError: null,
+              }
+            : {}),
         },
       });
     }

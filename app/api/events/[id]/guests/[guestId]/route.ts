@@ -41,6 +41,10 @@ async function loadContext(eventId: string, guestId: string) {
       email: true,
       cardType: true,
       cardStatus: true,
+      deliveryStatus: true,
+      deliveredAt: true,
+      deliveryProvider: true,
+      deliveryError: true,
       attendances: true,
     },
   });
@@ -61,6 +65,15 @@ export async function PATCH(request: Request, { params }: RouteContext) {
       body = await request.json();
     } catch {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    // Status is server-owned: generation follows rendering, and delivery
+    // follows provider confirmation. Clients cannot mark a card as sent.
+    if (body.cardStatus !== undefined || body.deliveryStatus !== undefined) {
+      return NextResponse.json(
+        { error: "Card and delivery status are managed by the server." },
+        { status: 400 },
+      );
     }
 
     const updates: Record<string, unknown> = {};
@@ -121,29 +134,38 @@ export async function PATCH(request: Request, { params }: RouteContext) {
       }
     }
 
-    if (body.cardStatus !== undefined) {
-      const cardStatus = String(body.cardStatus).toUpperCase();
-      if (!["PENDING", "GENERATED", "SENT"].includes(cardStatus)) {
-        return NextResponse.json({ error: "Invalid card status." }, { status: 400 });
-      }
-      if (cardStatus !== guest.cardStatus) {
-        before.cardStatus = guest.cardStatus;
-        updates.cardStatus = cardStatus;
-      }
-    }
+    // cardStatus is managed by the generation service. Delivery status is
+    // managed only by the WhatsApp delivery route after provider confirmation,
+    // so neither can be set by a client PATCH.
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
     }
 
     // The card prints the guest's name and quality, so those edits invalidate
-    // the cached PNG. Re-render immediately (a SENT card keeps its SENT state).
+    // the cached PNG. Re-render immediately. Changing the card content or the
+    // recipient also means the previously delivered card is no longer the
+    // current card, so reset delivery to NOT_SENT.
     const refreshCard = updates.fullName !== undefined || updates.cardType !== undefined;
+    const resetDelivery =
+      refreshCard || updates.whatsapp !== undefined || updates.phone !== undefined;
+    if (resetDelivery) {
+      before.deliveryStatus = guest.deliveryStatus;
+    }
     const updated = await prisma.guest.update({
       where: { id: guestId },
       data: {
         ...updates,
         ...(refreshCard ? { cardPng: null, cardFingerprint: null } : {}),
+        ...(resetDelivery
+          ? {
+              deliveryStatus: "NOT_SENT",
+              deliveredAt: null,
+              deliveryProvider: null,
+              deliveryMessageId: null,
+              deliveryError: null,
+            }
+          : {}),
       } as Prisma.GuestUpdateInput,
       select: GUEST_PUBLIC_SELECT,
     });
