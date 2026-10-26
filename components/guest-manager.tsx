@@ -86,9 +86,7 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
-  const [email, setEmail] = useState("");
   const [cardType, setCardType] = useState("STANDARD");
   const [saving, setSaving] = useState(false);
 
@@ -170,7 +168,7 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ fullName: name, phone, whatsapp, email, cardType }),
+        body: JSON.stringify({ fullName: name, whatsapp, cardType }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to add guest");
@@ -186,9 +184,7 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
         );
       }
       setName("");
-      setPhone("");
       setWhatsapp("");
-      setEmail("");
       setCardType("STANDARD");
       await loadData();
     } catch (err) {
@@ -313,22 +309,12 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
                     className="mt-1.5 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100" />
                 </label>
                 <label className="block text-sm font-semibold text-gray-700">
-                  Phone
-                  <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+255 712 345 678"
-                    className="mt-1.5 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100" />
-                </label>
-                <label className="block text-sm font-semibold text-gray-700">
-                  WhatsApp
+                  WhatsApp number
                   <input type="tel" value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} placeholder="+255 712 345 678"
                     className="mt-1.5 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100" />
                 </label>
                 <label className="block text-sm font-semibold text-gray-700">
-                  Email
-                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100" />
-                </label>
-                <label className="block text-sm font-semibold text-gray-700">
-                  Card type
+                  Card quality
                   <select value={cardType} onChange={(e) => setCardType(e.target.value)}
                     className="mt-1.5 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100">
                     <option value="STANDARD">Standard</option>
