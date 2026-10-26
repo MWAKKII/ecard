@@ -839,6 +839,9 @@ WhatsApp setup notes:
   `WHATSAPP_TEMPLATE_BODY_FIELDS=none` for a template without body variables.
 - Add test recipients to the Meta app while it is in development mode. Without
   a template, free-form sends only work inside the 24-hour service window.
+- `npm run test:whatsapp` sends an existing generated guest card to
+  `WHATSAPP_TEST_RECIPIENT` through the real provider. It reports the configured
+  mode and only succeeds after Meta returns a message id.
 ```
 
 ## Database Migrations

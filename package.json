@@ -14,7 +14,8 @@
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
     "db:test": "tsx scripts/test-database.ts",
-    "test:qr": "tsx scripts/test-qr.ts"
+    "test:qr": "tsx scripts/test-qr.ts",
+    "test:whatsapp": "tsx scripts/test-whatsapp.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",
