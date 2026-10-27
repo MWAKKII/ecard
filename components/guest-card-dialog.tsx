@@ -13,7 +13,8 @@ import {
  * Preview and PNG download are always available to the event owner. WhatsApp
  * delivery is a server action: the browser never marks a card as sent on its
  * own, and the button is disabled when the deployment has no provider
- * credentials configured.
+ * credentials configured. A separate manual WhatsApp action opens the guest
+ * chat and downloads the PNG; it never changes delivery state.
  */
 
 interface DeliveryState {
@@ -53,6 +54,7 @@ export default function GuestCardDialog({
 }) {
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
+  const [manualNotice, setManualNotice] = useState("");
   const [error, setError] = useState("");
   const [configError, setConfigError] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -67,11 +69,9 @@ export default function GuestCardDialog({
   const downloadUrl = `${cardUrl}?download=1`;
   const deliveryUrl = `/api/events/${eventId}/guests/${guest.id}/delivery`;
   const recipient = (guest.whatsapp || guest.phone || "").replace(/\D/g, "");
-  const canSend =
-    config?.configured === true &&
-    recipient.length >= 7 &&
-    recipient.length <= 15 &&
-    !sending;
+  const hasValidRecipient = recipient.length >= 7 && recipient.length <= 15;
+  const canSend = config?.configured === true && hasValidRecipient && !sending;
+  const canSendManually = hasValidRecipient && !sending;
 
   // WhatsApp availability is a deployment concern, not a guest concern. Check
   // it before offering a send action so the UI never implies delivery works
@@ -114,6 +114,7 @@ export default function GuestCardDialog({
     setError("");
     setConfigError("");
     setNotice("");
+    setManualNotice("");
     try {
       const res = await fetch(deliveryUrl, {
         method: "POST",
@@ -155,6 +156,39 @@ export default function GuestCardDialog({
     }
   }
 
+  /**
+   * Manual WhatsApp fallback. Opens the guest's chat and downloads the card so
+   * the organizer can attach it. This is deliberately not a delivery action:
+   * it never changes delivery status, because WhatsApp cannot confirm that the
+   * organizer actually sent the file.
+   */
+  function sendManually() {
+    if (!canSendManually) return;
+    setError("");
+    setConfigError("");
+    setNotice("");
+    setManualNotice("");
+
+    const waUrl = `https://wa.me/${recipient}?text=${encodeURIComponent(
+      `Hi ${guest.fullName}, here is your e-card for ${eventTitle}.`,
+    )}`;
+    const opened = window.open(waUrl, "_blank");
+    if (opened) opened.opener = null;
+
+    // Trigger the same authenticated PNG download as the Download button.
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setManualNotice(
+      opened
+        ? "WhatsApp opened in a new tab. Attach the downloaded card from your Downloads folder, then send it. Delivery status is unchanged."
+        : "The card was downloaded, but the browser blocked the WhatsApp tab. Open WhatsApp, choose this guest, and attach the downloaded card. Delivery status is unchanged.",
+    );
+  }
+
   // When the provider is missing and no send has been attempted yet, the
   // truthful state to show is "not configured", not "sent" or "not sent".
   const shownStatus: DeliveryStatusValue =
@@ -173,6 +207,11 @@ export default function GuestCardDialog({
         : !recipient
           ? "No WhatsApp number"
           : "Send via WhatsApp";
+  const manualSendLabel = !recipient
+    ? "No WhatsApp number"
+    : !hasValidRecipient
+      ? "Invalid WhatsApp number"
+      : "Send manually via WhatsApp";
 
   return (
     <div
@@ -249,6 +288,21 @@ export default function GuestCardDialog({
             >
               {sendLabel}
             </button>
+            <div className="border-t border-gray-100 pt-2">
+              <button
+                type="button"
+                onClick={sendManually}
+                disabled={!canSendManually}
+                className="w-full rounded-lg border border-emerald-600 px-4 py-2.5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
+              >
+                {manualSendLabel}
+              </button>
+              {hasValidRecipient && (
+                <p className="mt-1.5 text-center text-[11px] leading-4 text-gray-500">
+                  Downloads the PNG and opens the guest&apos;s chat. Does not change delivery status.
+                </p>
+              )}
+            </div>
             <button
               type="button"
               onClick={onClose}
@@ -261,7 +315,7 @@ export default function GuestCardDialog({
           {config?.configured === false && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-800">
               <span className="font-bold">WhatsApp delivery is not configured.</span> No message was sent. Download the
-              PNG and send it manually.
+              PNG or use <span className="font-bold">Send manually via WhatsApp</span>.
             </p>
           )}
           {config?.configured === true && config.mode === "image" && (
@@ -289,15 +343,33 @@ export default function GuestCardDialog({
               {notice}
             </p>
           )}
-          {error && (
-            <p className="rounded-lg bg-red-50 p-3 text-xs font-medium text-red-700" aria-live="polite">
-              {error}
+          {manualNotice && (
+            <p
+              className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs font-medium text-blue-800"
+              aria-live="polite"
+            >
+              {manualNotice}
             </p>
           )}
+          {error && (
+            <div className="rounded-lg bg-red-50 p-3 text-xs font-medium text-red-700" aria-live="polite">
+              <p>{error}</p>
+              {delivery.deliveryStatus === "FAILED" && (
+                <p className="mt-1.5">
+                  The card is still available. Use{" "}
+                  <span className="font-bold">Send manually via WhatsApp</span> or download the PNG.
+                </p>
+              )}
+            </div>
+          )}
           {!error && delivery.deliveryStatus === "FAILED" && delivery.deliveryError && (
-            <p className="rounded-lg bg-red-50 p-3 text-xs font-medium text-red-700">
-              Last delivery attempt: {delivery.deliveryError}
-            </p>
+            <div className="rounded-lg bg-red-50 p-3 text-xs font-medium text-red-700">
+              <p>Last delivery attempt: {delivery.deliveryError}</p>
+              <p className="mt-1.5">
+                The card is still available. Use{" "}
+                <span className="font-bold">Send manually via WhatsApp</span> or download the PNG.
+              </p>
+            </div>
           )}
         </div>
       </div>

@@ -559,8 +559,9 @@ Rules:
 - If `WHATSAPP_ACCESS_TOKEN` or `WHATSAPP_PHONE_NUMBER_ID` is missing, the
   service returns `NOT_CONFIGURED`, the guest is stored as `NOT_CONFIGURED`,
   and the dialog disables the send action with "WhatsApp delivery is not
-  configured". It never falls back to `wa.me` or a browser share while claiming
-  the card was sent. Downloading the PNG remains available for manual sending.
+  configured". A manual `wa.me` action can open the guest chat and download the
+  PNG for attachment, but it never claims the card was sent; only the provider
+  path can set `SENT`.
 - Provider failures return a non-2xx response and store `FAILED` plus a safe
   error message. The config GET endpoint only exposes
   `{ configured, provider, mode }` — never credentials.
@@ -803,8 +804,9 @@ components/
 │                             status columns, gate for non-AUTHORIZED events,
 │                             Card action for delivery)
 └── guest-card-dialog.tsx    (Personalized PNG preview + Download + server-side
-                              WhatsApp delivery; checks provider configuration,
-                              shows NOT CONFIGURED, never marks sent locally)
+                              WhatsApp delivery + manual WhatsApp fallback;
+                              checks provider configuration, shows NOT
+                              CONFIGURED, never marks sent locally)
 ```
 
 ## Environment Configuration
@@ -965,7 +967,9 @@ Notes:
      configured, otherwise a free-form image for the open service window.
      `SENT` requires a provider message id; missing credentials produce
      `NOT_CONFIGURED`, and provider errors produce `FAILED` with a safe reason.
-     There is no `wa.me` or Web Share fallback that claims a send.
+     A separate manual action opens `wa.me` for the guest and downloads the
+     card for attachment, but it never changes delivery state or claims a
+     send. There is no browser share/download path that marks a card `SENT`.
    - QR content is only the random token — no editable personal data; the
      server resolves the token back to the guest record
 
