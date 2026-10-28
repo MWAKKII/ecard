@@ -12,15 +12,10 @@ function isRemoteDatabase(hostname: string): boolean {
   return !LOCAL_HOSTS.has(hostname.toLowerCase());
 }
 
-function isSecureSslMode(mode: string | null, libpqCompat: boolean): boolean {
-  if (!mode) return false;
-  const normalized = mode.toLowerCase();
-
-  if (normalized === "verify-full") return true;
-  // pg-connection-string's non-libpq mode still verifies certificates for
-  // "require"; libpq-compatible mode explicitly disables verification.
-  if (normalized === "require" && !libpqCompat) return true;
-  return false;
+function isSecureSslMode(mode: string | null): boolean {
+  // `require` encrypts the connection but does not verify the server
+  // certificate. Production needs verify-full plus the Supabase root CA.
+  return mode?.toLowerCase() === "verify-full";
 }
 
 export function validateDatabaseUrl(connectionString: string): void {
@@ -39,7 +34,7 @@ export function validateDatabaseUrl(connectionString: string): void {
 
   const sslmode = url.searchParams.get("sslmode");
   const libpqCompat = url.searchParams.get("uselibpqcompat")?.toLowerCase() === "true";
-  const secure = isSecureSslMode(sslmode, libpqCompat);
+  const secure = isSecureSslMode(sslmode) && !libpqCompat;
 
   if (process.env.NODE_ENV === "production") {
     if (!secure) {

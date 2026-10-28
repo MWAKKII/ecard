@@ -9,6 +9,9 @@ import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
+// Batch card preparation can take longer than a default function timeout.
+export const maxDuration = 60;
+
 const MAX_ROWS = 2000;
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 

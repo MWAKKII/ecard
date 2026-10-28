@@ -3,8 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { renderGuestCard } from "@/lib/card-render";
 import { buildCardFingerprint, resolveTemplateLayout } from "@/lib/card-generation";
+import { loadImageDataUrl } from "@/lib/object-storage";
 
 type RouteContext = { params: Promise<{ id: string; guestId: string }> };
+
+// Sharp rendering can exceed the default function timeout for large designs.
+export const maxDuration = 60;
 
 /**
  * Personalized e-card PNG for one guest (spec Step 8).
@@ -99,7 +103,7 @@ export async function GET(request: Request, { params }: RouteContext) {
       }
     } else {
       const rendered = await renderGuestCard({
-        templateDataUrl: template.imageUrl,
+        templateDataUrl: await loadImageDataUrl(template.imageUrl),
         guestName: guest.fullName,
         eventTitle: guest.event.title,
         qrToken: guest.qrToken,

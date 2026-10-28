@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logError } from "@/lib/logger";
 
 /**
  * Health check (Step 1 — "a /health page that returns OK and optionally
@@ -16,7 +17,8 @@ export async function GET() {
   try {
     await prisma.$queryRaw`SELECT 1`;
     return NextResponse.json({ ...base, database: "up" }, { status: 200 });
-  } catch {
+  } catch (error) {
+    logError("Health check database probe failed", error);
     return NextResponse.json(
       { ...base, status: "degraded" as const, database: "down" },
       { status: 503 },

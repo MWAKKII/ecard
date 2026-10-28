@@ -9,6 +9,9 @@ import { readJsonBody } from "@/lib/request";
 
 type RouteContext = { params: Promise<{ id: string; guestId: string }> };
 
+// Admin repairs may immediately re-render the guest card.
+export const maxDuration = 60;
+
 /**
  * Admin correction of guest details.
  *

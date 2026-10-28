@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { renderGuestCard } from "@/lib/card-render";
+import { loadImageDataUrl } from "@/lib/object-storage";
 import {
   analyzeTemplateLayout,
   isUsableTemplateLayout,
@@ -70,7 +71,7 @@ export async function resolveTemplateLayout(template: TemplateRecord): Promise<R
   }
 
   try {
-    const analyzed = await analyzeTemplateLayout(template.imageUrl);
+    const analyzed = await analyzeTemplateLayout(await loadImageDataUrl(template.imageUrl));
     const updated = await prisma.cardTemplate.update({
       where: { id: template.id },
       data: { layout: analyzed as unknown as Prisma.InputJsonValue },
@@ -200,10 +201,12 @@ export async function generateCardsForGuests(
   }
 
   let resolved: ResolvedTemplateLayout;
+  let templateDataUrl: string;
   try {
     resolved = await resolveTemplateLayout(template);
+    templateDataUrl = await loadImageDataUrl(template.imageUrl);
   } catch (error) {
-    console.error(`[cards] could not resolve template layout for event ${eventId}:`, error);
+    console.error(`[cards] could not load template for event ${eventId}:`, error);
     return { generated: 0, failed: 0, skipped: guestIds.length, reason: "layout-failed" };
   }
 
@@ -227,7 +230,7 @@ export async function generateCardsForGuests(
   const renderOne = async (guest: (typeof guests)[number]) => {
     try {
       const { png } = await renderGuestCard({
-        templateDataUrl: template.imageUrl,
+        templateDataUrl,
         guestName: guest.fullName,
         eventTitle: event.title,
         qrToken: guest.qrToken,

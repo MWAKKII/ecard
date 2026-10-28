@@ -7,12 +7,24 @@ import { analyzeTemplateLayout, type TemplateLayout } from "@/lib/template-layou
 import { recordAudit, clientIp } from "@/lib/audit";
 import { readJsonBody } from "@/lib/request";
 import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import {
+  createTemplateObjectKey,
+  deleteImageObject,
+  hasObjectStorageConfig,
+  isObjectStorageConfigured,
+  uploadImageObject,
+} from "@/lib/object-storage";
+import { logError } from "@/lib/logger";
+
+// OCR can take several seconds on a large design. Vercel Hobby allows 60s.
+export const maxDuration = 60;
 
 /**
  * Card design templates (Step 10 groundwork).
- * Designs are uploaded from the admin's PC as an image file and stored as a
- * base64 data URL in `imageUrl` - there is no longer any price, description
- * or remote-URL entry (see migration 20261021110000).
+ * Designs are uploaded from the admin's PC as an image file. New uploads are
+ * stored in a private Supabase Storage bucket when configured; local
+ * development may fall back to a base64 data URL in `imageUrl`. Existing
+ * data-URL records remain readable (see migration 20261021110000).
  */
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB after decoding
@@ -58,7 +70,16 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
       include: { _count: { select: { events: true } } },
     });
-    return NextResponse.json(templates, { status: 200 });
+    // Never send the storage reference or a multi-megabyte data URL to the
+    // browser. The authenticated image endpoint serves both storage-backed and
+    // legacy data-URL designs.
+    return NextResponse.json(
+      templates.map((template) => ({
+        ...template,
+        imageUrl: `/api/templates/${template.id}/image`,
+      })),
+      { status: 200 },
+    );
   } catch (error: unknown) {
     console.error("Template list error:", error);
     return NextResponse.json({ error: "Unable to load card designs" }, { status: 500 });
@@ -156,6 +177,20 @@ export async function POST(request: Request) {
       );
     }
 
+    const hasStorageSettings = hasObjectStorageConfig();
+    if (hasStorageSettings && !isObjectStorageConfigured()) {
+      return NextResponse.json(
+        { error: "Object storage is configured incorrectly. Ask an administrator to check the server environment." },
+        { status: 503 },
+      );
+    }
+    if (!hasStorageSettings && process.env.NODE_ENV === "production") {
+      return NextResponse.json(
+        { error: "Object storage is not configured. Set the Supabase Storage environment variables before uploading designs." },
+        { status: 503 },
+      );
+    }
+
     // Read the design's placeholder words once, at upload time. A design
     // without placeholders still gets an empty layout marker, so renders never
     // have to retry OCR.
@@ -166,15 +201,49 @@ export async function POST(request: Request) {
       console.error("Template layout analysis failed; using fallback layout:", error);
     }
 
-    const newTemplate = await prisma.cardTemplate.create({
-      data: {
-        title,
-        imageUrl,
-        status: "ACTIVE",
-        createdById: admin.userId,
-        ...(layout ? { layout: layout as unknown as Prisma.InputJsonValue } : {}),
-      },
-    });
+    let storedImageUrl = imageUrl;
+    let storage: "database" | "supabase" = "database";
+    if (hasStorageSettings) {
+      try {
+        const contentType = `image/${mimeType}`;
+        const objectPath = createTemplateObjectKey(contentType);
+        storedImageUrl = await uploadImageObject(objectPath, bytes, contentType);
+        storage = "supabase";
+      } catch (error) {
+        logError("Template image storage upload failed", error, {
+          adminId: admin.userId,
+          bytes: bytes.length,
+          format,
+        });
+        return NextResponse.json(
+          { error: "The design image could not be stored. Please try again." },
+          { status: 502 },
+        );
+      }
+    }
+
+    const newTemplate = await prisma.cardTemplate
+      .create({
+        data: {
+          title,
+          imageUrl: storedImageUrl,
+          status: "ACTIVE",
+          createdById: admin.userId,
+          ...(layout ? { layout: layout as unknown as Prisma.InputJsonValue } : {}),
+        },
+      })
+      .catch(async (error) => {
+        if (storage === "supabase") {
+          try {
+            await deleteImageObject(storedImageUrl);
+          } catch (cleanupError) {
+            logError("Orphaned template image cleanup failed", cleanupError, {
+              adminId: admin.userId,
+            });
+          }
+        }
+        throw error;
+      });
 
     await recordAudit({
       actorId: admin.userId,
@@ -187,11 +256,21 @@ export async function POST(request: Request) {
         width,
         height,
         bytes: bytes.length,
+        storage,
       },
       ipAddress: clientIp(request),
     });
 
-    return NextResponse.json({ success: true, template: newTemplate }, { status: 201 });
+    return NextResponse.json(
+      {
+        success: true,
+        template: {
+          ...newTemplate,
+          imageUrl: `/api/templates/${newTemplate.id}/image`,
+        },
+      },
+      { status: 201 },
+    );
   } catch (error: unknown) {
     console.error("Template upload error:", error);
     return NextResponse.json({ error: "Unable to upload the card design" }, { status: 500 });

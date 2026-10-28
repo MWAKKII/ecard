@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# E-Card
 
-## Getting Started
+Event invitation and guest-card platform built with Next.js 16, Prisma 7,
+PostgreSQL (Supabase), Sharp, Tesseract OCR and PDFKit.
 
-First, run the development server:
+## What is in the app
+
+- Organizer accounts, event requests, pricing and payment records.
+- Guest lists, CSV import, private QR tokens and QR check-in.
+- Card-design templates with placeholder detection and server-side PNG rendering.
+- Guest card delivery through the optional Meta WhatsApp Cloud API.
+- Owner reports (CSV/PDF) and audited administrator overrides.
+- Private Supabase Storage for uploaded design images. Generated guest PNGs
+  remain a private, regenerable cache in Postgres.
+
+## Local development
+
+Requirements: Node.js **20.9+**, npm, and a Supabase project.
 
 ```bash
+copy .env.example .env       # Windows; use cp on macOS/Linux
+# Fill in DATABASE_URL, DIRECT_URL, JWT_SECRET and the SUPABASE_* values first:
+# the postinstall step loads prisma7.config.ts.
+npm ci
+npm run db:migrate:deploy
+npm run db:seed
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open <http://localhost:3000>. The app works over HTTP locally, but browser
+camera access requires HTTPS (or `localhost`, which browsers treat as secure).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+For local schema changes, use `npm run db:migrate`; for the production database,
+use `npm run db:migrate:deploy` as described in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Useful commands
 
-## Learn More
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Development server |
+| `npm run build` | Production build |
+| `npm run start` | Run the production build |
+| `npm run lint` | ESLint |
+| `npx tsc --noEmit` | Type-check |
+| `npm run db:generate` | Generate the Prisma client |
+| `npm run db:migrate` | Create/apply a development migration |
+| `npm run db:migrate:deploy` | Apply committed migrations to a database |
+| `npm run db:migrate:status` | Show migration status |
+| `npm run db:seed` | Seed pricing tiers and the admin account |
+| `npm run db:test` | Verify the database connection and row counts |
+| `npm run test:qr` | QR utility checks |
+| `npm run test:whatsapp` | Optional WhatsApp delivery check |
 
-To learn more about Next.js, take a look at the following resources:
+## Production
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The production target is **Vercel + Supabase Postgres + private Supabase
+Storage**. The complete dashboard settings, environment variables, migration
+order, domain/HTTPS setup, firewall/logging recommendations and verification
+steps are in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Do not commit `.env` files or Supabase service/secret keys. Only
+`.env.example` is tracked.
 
-## Deploy on Vercel
+## Security notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Remote production database connections must use verified TLS
+  (`sslmode=verify-full`); the app refuses to start otherwise.
+- Supabase's Data API is not used. The RLS migration enables row-level security
+  and revokes the `anon`/`authenticated` grants on every public table.
+- Session tokens are HTTP-only cookies. In production they are `Secure` and
+  `SameSite=Lax`.
+- Uploaded design files are served only through the authenticated
+  `/api/templates/[id]/image` route.

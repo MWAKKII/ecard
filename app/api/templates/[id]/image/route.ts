@@ -1,22 +1,19 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
+import { loadImageSource } from "@/lib/object-storage";
+import { logError } from "@/lib/logger";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-const DATA_URL_RE = /^data:image\/(png|jpeg|webp|gif|avif);base64,([A-Za-z0-9+/]+={0,2})$/;
-
-const CONTENT_TYPES: Record<string, string> = {
-  png: "image/png",
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-  gif: "image/gif",
-  avif: "image/avif",
-};
-
 /**
- * Serves a card design image as binary instead of embedding the multi-megabyte
- * base64 data URL in the template list. Cached privately per browser.
+ * Serves a card design image as binary. Admins may preview every design;
+ * organizers may only preview ACTIVE designs. The image may live in private
+ * Supabase Storage or in a legacy base64 data URL.
+ *
+ * Cached privately per browser. The image endpoint is the only place that
+ * resolves storage references for the client, so bucket/path details never
+ * need to be exposed to the browser.
  */
 export async function GET(_request: Request, { params }: RouteContext) {
   try {
@@ -25,27 +22,27 @@ export async function GET(_request: Request, { params }: RouteContext) {
 
     const { id } = await params;
     const template = await prisma.cardTemplate.findFirst({
-      where: { id, status: "ACTIVE" },
+      where: {
+        id,
+        ...(session.role === "ADMIN" ? {} : { status: "ACTIVE" }),
+      },
       select: { imageUrl: true },
     });
     if (!template) return NextResponse.json({ error: "Design not found" }, { status: 404 });
 
-    const match = DATA_URL_RE.exec(template.imageUrl);
-    if (!match) return NextResponse.json({ error: "Design image is unavailable" }, { status: 500 });
+    const image = await loadImageSource(template.imageUrl);
 
-    const bytes = Buffer.from(match[2], "base64");
-
-    return new NextResponse(new Uint8Array(bytes), {
+    return new NextResponse(new Uint8Array(image.bytes), {
       status: 200,
       headers: {
-        "Content-Type": CONTENT_TYPES[match[1]] ?? "application/octet-stream",
-        "Content-Length": String(bytes.length),
+        "Content-Type": image.contentType,
+        "Content-Length": String(image.bytes.length),
         "Cache-Control": "private, max-age=3600",
         "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (error) {
-    console.error("Template image error:", error);
+    logError("Template image error", error);
     return NextResponse.json({ error: "Unable to load the design image" }, { status: 500 });
   }
 }

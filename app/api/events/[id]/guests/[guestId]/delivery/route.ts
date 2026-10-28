@@ -13,6 +13,10 @@ import {
 
 type RouteContext = { params: Promise<{ id: string; guestId: string }> };
 
+// Rendering + provider upload + WhatsApp API call may take longer than a
+// default short function timeout.
+export const maxDuration = 60;
+
 function publicConfig(config: WhatsAppDeliveryConfig) {
   return { configured: config.configured, provider: config.provider, mode: config.mode };
 }

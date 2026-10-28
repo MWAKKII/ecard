@@ -17,7 +17,13 @@ function createPrismaClient() {
 
   validateDatabaseUrl(connectionString);
 
-  const adapter = new PrismaPg({ connectionString });
+  // Vercel/serverless instances are reused for many invocations. A single
+  // connection per instance avoids exhausting Supabase's pooler; local
+  // development keeps a larger pool for parallel work.
+  const adapter = new PrismaPg({
+    connectionString,
+    max: process.env.NODE_ENV === "production" ? 1 : 10,
+  });
   return new PrismaClient({ adapter });
 }
 

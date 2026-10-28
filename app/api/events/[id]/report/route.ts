@@ -12,6 +12,7 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 // PDFKit uses Node streams and standard font metrics from the package.
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "private, no-store",

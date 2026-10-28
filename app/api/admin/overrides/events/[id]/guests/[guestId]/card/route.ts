@@ -7,6 +7,9 @@ import { recordAudit, clientIp } from "@/lib/audit";
 
 type RouteContext = { params: Promise<{ id: string; guestId: string }> };
 
+// Card rendering can exceed the default function timeout for large designs.
+export const maxDuration = 60;
+
 /**
  * Admin card regeneration override.
  *

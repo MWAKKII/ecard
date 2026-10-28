@@ -1,0 +1,13 @@
+# Never upload local secrets with a CLI deployment.
+.env
+.env.*
+!.env.example
+
+# Build artifacts and dependencies are rebuilt by Vercel.
+.next
+node_modules
+coverage
+*.tsbuildinfo
+
+# Local tooling state.
+.vercel

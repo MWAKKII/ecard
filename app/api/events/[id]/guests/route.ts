@@ -9,6 +9,9 @@ import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
+// Card preparation after guest creation uses Sharp.
+export const maxDuration = 60;
+
 /**
  * Guest list & single-guest creation (Step 8).
  * Hard business gate: guests only exist on AUTHORIZED events, and only for
