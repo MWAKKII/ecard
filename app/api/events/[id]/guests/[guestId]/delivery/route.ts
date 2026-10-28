@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getOwnedEvent, getSession } from "@/lib/session";
 import { generateCardsForGuests } from "@/lib/card-generation";
 import { clientIp, recordAudit } from "@/lib/audit";
+import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import {
   getWhatsAppDeliveryConfig,
   sendWhatsAppCard,
@@ -128,6 +129,23 @@ export async function POST(request: Request, { params }: RouteContext) {
     if ("error" in gate) return gate.error;
 
     const { session, guest } = gate;
+
+    // WhatsApp delivery can cost money and trigger provider abuse controls.
+    // Limit repeated attempts per guest and total sends per account.
+    const guestLimit = takeRateLimit(
+      `delivery:guest:${session.userId}:${guestId}`,
+      5,
+      10 * 60 * 1000,
+    );
+    if (!guestLimit.allowed) {
+      return rateLimitResponse(guestLimit, "Too many delivery attempts for this guest. Try again later.");
+    }
+
+    const userLimit = takeRateLimit(`delivery:user:${session.userId}`, 300, 60 * 60 * 1000);
+    if (!userLimit.allowed) {
+      return rateLimitResponse(userLimit, "Too many card deliveries. Try again later.");
+    }
+
     const config = getWhatsAppDeliveryConfig();
 
     if (!config.configured) {

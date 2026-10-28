@@ -32,6 +32,14 @@ export interface AutoCardResult {
   reason?: "no-template" | "event-not-ready" | "layout-failed";
 }
 
+export interface GenerateCardsOptions {
+  /**
+   * Admin overrides may repair guest/card data while an event is suspended.
+   * Normal owner-triggered generation still requires AUTHORIZED.
+   */
+  allowInactiveEvent?: boolean;
+}
+
 interface TemplateRecord {
   id: string;
   imageUrl: string;
@@ -159,6 +167,7 @@ export function buildCardFingerprint(input: CardFingerprintInput): string {
 export async function generateCardsForGuests(
   eventId: string,
   guestIds: string[],
+  options: GenerateCardsOptions = {},
 ): Promise<AutoCardResult> {
   if (guestIds.length === 0) return { generated: 0, failed: 0, skipped: 0 };
 
@@ -181,7 +190,7 @@ export async function generateCardsForGuests(
     },
   });
 
-  if (!event || event.status !== "AUTHORIZED") {
+  if (!event || (event.status !== "AUTHORIZED" && options.allowInactiveEvent !== true)) {
     return { generated: 0, failed: 0, skipped: guestIds.length, reason: "event-not-ready" };
   }
 

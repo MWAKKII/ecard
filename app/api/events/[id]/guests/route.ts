@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, getOwnedEvent } from "@/lib/session";
-import { GUEST_PUBLIC_SELECT, validateGuestRow } from "@/lib/guests";
+import { GUEST_PUBLIC_SELECT, lockEventForGuestWrite, validateGuestRow } from "@/lib/guests";
 import { generateCardsForGuests } from "@/lib/card-generation";
 import { recordAudit, clientIp } from "@/lib/audit";
+import { readJsonBody } from "@/lib/request";
+import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -86,60 +88,78 @@ export async function POST(request: Request, { params }: RouteContext) {
     if ("error" in gate) return gate.error;
     const { session, event } = gate;
 
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    const limit = takeRateLimit(
+      `guest:create:${session.userId}:${eventId}`,
+      60,
+      60 * 1000,
+    );
+    if (!limit.allowed) {
+      return rateLimitResponse(limit, "Too many guest additions. Try again later.");
     }
+
+    const parsed = await readJsonBody(request, 64 * 1024);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
 
     const validated = validateGuestRow(body);
     if (!validated.ok) {
       return NextResponse.json({ error: validated.reason }, { status: 400 });
     }
 
-    // Duplicate check against the event's existing list.
-    const dupe = await prisma.guest.findFirst({
-      where: {
-        eventId,
-        OR: [
-          { fullName: { equals: validated.row.fullName, mode: "insensitive" } },
-          ...(validated.row.email ? [{ email: validated.row.email }] : []),
-        ],
-      },
-      select: { id: true, fullName: true },
-    });
-    if (dupe) {
-      return NextResponse.json(
-        { error: `"${validated.row.fullName}" is already on the guest list.` },
-        { status: 409 },
-      );
-    }
+    const outcome = await prisma.$transaction(async (tx) => {
+      await lockEventForGuestWrite(tx, eventId);
+
+      // Duplicate check against the event's existing list.
+      const dupe = await tx.guest.findFirst({
+        where: {
+          eventId,
+          OR: [
+            { fullName: { equals: validated.row.fullName, mode: "insensitive" } },
+            ...(validated.row.email ? [{ email: validated.row.email }] : []),
+          ],
+        },
+        select: { id: true, fullName: true },
+      });
+      if (dupe) {
+        return {
+          ok: false as const,
+          status: 409,
+          error: `"${validated.row.fullName}" is already on the guest list.`,
+        };
+      }
 
     // Enforce the event's pricing-tier capacity: the "1-100" tier allows at
     // most 100 guests, "101-200" allows 200, and so on (spec — guest count
     // drives pricing, so the tier's range is the hard capacity).
-    const [guestCount, tier] = await Promise.all([
-      prisma.guest.count({ where: { eventId } }),
-      prisma.pricingTier.findUnique({ where: { id: event.pricingTierId } }),
-    ]);
-    const capacity = tier?.maxGuests ?? event.guestCount;
-    if (guestCount >= capacity) {
-      const plan = tier ? `The ${tier.minGuests}-${tier.maxGuests} guest tier` : "This pricing plan";
-      return NextResponse.json(
-        {
+      const [guestCount, tier] = await Promise.all([
+        tx.guest.count({ where: { eventId } }),
+        tx.pricingTier.findUnique({ where: { id: event.pricingTierId } }),
+      ]);
+      const capacity = tier?.maxGuests ?? event.guestCount;
+      if (guestCount >= capacity) {
+        const plan = tier
+          ? `The ${tier.minGuests}-${tier.maxGuests} guest tier`
+          : "This pricing plan";
+        return {
+          ok: false as const,
+          status: 409,
           error:
             `${plan} allows up to ${capacity} guest(s) and this event already has ${guestCount}. ` +
             `Choose a larger tier to add more.`,
-        },
-        { status: 409 },
-      );
-    }
+        };
+      }
 
-    const guest = await prisma.guest.create({
-      data: { eventId, ...validated.row },
-      select: GUEST_PUBLIC_SELECT,
+      const guest = await tx.guest.create({
+        data: { eventId, ...validated.row },
+        select: GUEST_PUBLIC_SELECT,
+      });
+      return { ok: true as const, guest };
     });
+
+    if (!outcome.ok) {
+      return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+    }
+    const guest = outcome.guest;
 
     // Prepare the personalized card immediately with the event's selected,
     // active design. A rendering failure must not lose the guest — the card

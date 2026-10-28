@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/session";
 import { recordAudit, clientIp } from "@/lib/audit";
+import { readJsonBody } from "@/lib/request";
 
 /**
  * Admin account management.
@@ -49,12 +50,9 @@ export async function PATCH(request: Request) {
     if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     const ip = clientIp(request);
 
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-    }
+    const parsed = await readJsonBody(request, 32 * 1024);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
     const userId = typeof body.userId === "string" ? body.userId : "";
     const role = typeof body.role === "string" ? body.role : undefined;
     const authorizationStatus = typeof body.authorizationStatus === "string" ? body.authorizationStatus : undefined;
@@ -67,6 +65,15 @@ export async function PATCH(request: Request) {
     }
     if (authorizationStatus !== undefined && !(AUTH_STATUSES as readonly string[]).includes(authorizationStatus)) {
       return NextResponse.json({ error: "Invalid authorization status" }, { status: 400 });
+    }
+    if (
+      userId === admin.userId &&
+      (authorizationStatus === "REJECTED" || authorizationStatus === "SUSPENDED")
+    ) {
+      return NextResponse.json(
+        { error: "You cannot reject or suspend your own account" },
+        { status: 409 },
+      );
     }
 
     const target = await prisma.user.findUnique({ where: { id: userId } });
@@ -132,7 +139,15 @@ export async function DELETE(request: Request) {
         name: true,
         role: true,
         authorizationStatus: true,
-        _count: { select: { events: true, payments: true, cardTemplates: true } },
+        _count: {
+          select: {
+            events: true,
+            payments: true,
+            cardTemplates: true,
+            checkIns: true,
+            reviewedPayments: true,
+          },
+        },
       },
       where: { id: userId },
     });
@@ -147,13 +162,14 @@ export async function DELETE(request: Request) {
         return NextResponse.json({ error: "This is the last ADMIN account and cannot be deleted" }, { status: 409 });
       }
     }
-    const { events, payments, cardTemplates } = target._count;
-    if (events + payments + cardTemplates > 0) {
+    const { events, payments, cardTemplates, checkIns, reviewedPayments } = target._count;
+    if (events + payments + cardTemplates + checkIns + reviewedPayments > 0) {
       return NextResponse.json(
         {
           error:
-            `Cannot delete ${target.email}: the account owns ${events} event(s), ${payments} payment record(s) ` +
-            `and ${cardTemplates} template(s). Payment records are financial history and events reference their owner.`,
+            `Cannot delete ${target.email}: the account owns ${events} event(s), ${payments} payment record(s), ` +
+            `${cardTemplates} template(s), ${checkIns} check-in record(s) and ${reviewedPayments} payment review(s). ` +
+            "These records are financial or attendance history and must keep their attribution.",
         },
         { status: 409 },
       );

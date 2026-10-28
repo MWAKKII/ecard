@@ -41,6 +41,7 @@ export async function GET(_request: Request, { params }: RouteContext) {
         "Content-Type": CONTENT_TYPES[match[1]] ?? "application/octet-stream",
         "Content-Length": String(bytes.length),
         "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (error) {

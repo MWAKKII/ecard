@@ -14,7 +14,15 @@ import {
  */
 
 function csvEscape(value: string | number | null | undefined): string {
-  const text = value === null || value === undefined ? "" : String(value);
+  let text = value === null || value === undefined ? "" : String(value);
+
+  // Formula-injection defence: Excel/Sheets can execute a cell that starts
+  // with =, +, -, @, tab or carriage return. Prefix those strings with an
+  // apostrophe so the export remains data, even if a guest name is hostile.
+  if (typeof value === "string" && /^[\s]*[=+\-@\t\r]/.test(text)) {
+    text = `'${text}`;
+  }
+
   if (/[",\r\n]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`;
   }

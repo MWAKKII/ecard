@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { requestIp } from "@/lib/client-ip";
 
 /**
  * Audit trail helper (spec section 15).
@@ -38,7 +39,5 @@ export async function recordAudit(entry: AuditEntry): Promise<void> {
 
 /** Best-effort client IP extraction for audit records. */
 export function clientIp(request: Request): string | null {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
-  return request.headers.get("x-real-ip");
+  return requestIp(request);
 }

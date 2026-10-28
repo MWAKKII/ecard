@@ -6,6 +6,7 @@ export interface SessionClaims {
   userId: string;
   email: string;
   role: string;
+  authorizationStatus: string;
 }
 
 /**
@@ -22,11 +23,25 @@ export async function getSession(): Promise<SessionClaims | null> {
 
   const user = await prisma.user.findUnique({
     where: { id: claims.userId },
-    select: { id: true, email: true, role: true },
+    select: { id: true, email: true, role: true, authorizationStatus: true },
   });
   if (!user) return null;
 
-  return { userId: user.id, email: user.email, role: user.role };
+  // Administrative rejection/suspension is an authorization decision, not a
+  // cosmetic label. Stop using every existing token immediately.
+  if (
+    user.authorizationStatus === "REJECTED" ||
+    user.authorizationStatus === "SUSPENDED"
+  ) {
+    return null;
+  }
+
+  return {
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    authorizationStatus: user.authorizationStatus,
+  };
 }
 
 /** Returns the session only when the user is an ADMIN, otherwise null. */

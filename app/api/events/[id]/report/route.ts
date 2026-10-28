@@ -6,6 +6,7 @@ import {
   buildReportPdf,
 } from "@/lib/report-export";
 import { reportFilename } from "@/lib/report-format";
+import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -34,6 +35,15 @@ export async function GET(request: Request, { params }: RouteContext) {
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401, headers: NO_STORE_HEADERS },
+      );
+    }
+
+    const reportLimit = takeRateLimit(`report:generate:${session.userId}`, 20, 60 * 1000);
+    if (!reportLimit.allowed) {
+      return rateLimitResponse(
+        reportLimit,
+        "Too many report requests. Try again later.",
+        NO_STORE_HEADERS,
       );
     }
 

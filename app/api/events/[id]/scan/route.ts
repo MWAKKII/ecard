@@ -3,8 +3,27 @@ import { prisma } from "@/lib/prisma";
 import { getSession, getOwnedEvent } from "@/lib/session";
 import { isValidQrTokenFormat } from "@/lib/qr";
 import { recordAudit, clientIp } from "@/lib/audit";
+import { readJsonBody } from "@/lib/request";
+import { takeRateLimit, type RateLimitResult } from "@/lib/rate-limit";
+import { requestIp } from "@/lib/client-ip";
 
 type RouteContext = { params: Promise<{ id: string }> };
+
+function scanRateLimitResponse(limit: RateLimitResult) {
+  return NextResponse.json(
+    {
+      state: "rate_limited",
+      error: "Too many scan attempts. Wait a moment and try again.",
+    },
+    {
+      status: 429,
+      headers: {
+        "Cache-Control": "no-store",
+        "Retry-After": String(Math.max(1, limit.retryAfterSeconds)),
+      },
+    },
+  );
+}
 
 interface GuestSummary {
   id: string;
@@ -66,6 +85,15 @@ export async function POST(request: Request, { params }: RouteContext) {
 
     const { id: eventId } = await params;
 
+    const userLimit = takeRateLimit(`scan:user:${session.userId}`, 600, 60 * 1000);
+    if (!userLimit.allowed) return scanRateLimitResponse(userLimit);
+
+    const ip = requestIp(request);
+    if (ip) {
+      const ipLimit = takeRateLimit(`scan:ip:${ip}`, 2_000, 60 * 1000);
+      if (!ipLimit.allowed) return scanRateLimitResponse(ipLimit);
+    }
+
     // Ownership is the event-level gate. STAFF users can scan an event only
     // when they own it until a staff-to-event assignment model exists.
     const event = await getOwnedEvent(eventId, session.userId);
@@ -85,20 +113,15 @@ export async function POST(request: Request, { params }: RouteContext) {
       );
     }
 
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
+    const parsed = await readJsonBody(request, 8 * 1024);
+    if (!parsed.ok) {
       return NextResponse.json(
         { state: "invalid_card", error: "Invalid request body." },
-        { status: 400 },
+        { status: parsed.response.status === 413 ? 413 : 400 },
       );
     }
 
-    const token =
-      typeof body === "object" && body !== null && "token" in body
-        ? (body as { token?: unknown }).token
-        : undefined;
+    const token = parsed.body.token;
 
     // Reject malformed input before touching guest data. A scanner may read
     // any QR code, so this is the first line of defence for non-ticket codes.

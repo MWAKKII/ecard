@@ -1,5 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../app/generated/prisma/client";
+import { validateDatabaseUrl } from "@/lib/database-url";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -13,6 +14,8 @@ function createPrismaClient() {
       "DATABASE_URL is not set. Add your Supabase connection string to .env.",
     );
   }
+
+  validateDatabaseUrl(connectionString);
 
   const adapter = new PrismaPg({ connectionString });
   return new PrismaClient({ adapter });

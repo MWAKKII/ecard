@@ -2,6 +2,7 @@ import "dotenv/config";
 import { hash } from "bcryptjs";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../app/generated/prisma/client";
+import { validateDatabaseUrl } from "../lib/database-url";
 
 function createClient() {
   const connectionString = process.env.DATABASE_URL;
@@ -11,6 +12,8 @@ function createClient() {
       "DATABASE_URL is not set. Add your Supabase connection string to .env before seeding.",
     );
   }
+
+  validateDatabaseUrl(connectionString);
 
   return new PrismaClient({
     adapter: new PrismaPg({ connectionString }),
@@ -37,10 +40,19 @@ const pricingTiers = [
 async function main() {
   const adminEmail = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase() || "mwakki@ecard.local";
   const adminUsername = process.env.SEED_ADMIN_USERNAME?.trim() || "Mwakki";
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD?.trim() || "qwertyuiop";
-  if (!process.env.SEED_ADMIN_PASSWORD?.trim()) {
-    console.warn(
-      "[seed] SEED_ADMIN_PASSWORD is not set — using the default dev password. Set it in .env before deploying.",
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD?.trim();
+
+  if (!adminPassword) {
+    throw new Error(
+      "SEED_ADMIN_PASSWORD is required. Set a strong, unique admin password before seeding.",
+    );
+  }
+  if (adminPassword.length < 12) {
+    throw new Error("SEED_ADMIN_PASSWORD must be at least 12 characters long.");
+  }
+  if (/^(replace|change[-_ ]?me|password|qwertyuiop)/i.test(adminPassword)) {
+    throw new Error(
+      "SEED_ADMIN_PASSWORD is a placeholder or known default. Choose a unique password.",
     );
   }
 

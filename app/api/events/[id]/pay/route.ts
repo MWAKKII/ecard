@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, getOwnedEvent } from "@/lib/session";
+import { readJsonBody } from "@/lib/request";
+import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 const PAYMENT_METHODS = ["VodaLipa", "AirtelLipa", "Mpesa"];
+const MAX_REFERENCE_LENGTH = 120;
+const MAX_BODY_BYTES = 32 * 1024;
 
 /**
  * Submit (or resubmit) a manual mobile-money payment proof for an event.
@@ -17,21 +21,25 @@ export async function POST(request: Request, { params }: RouteContext) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { id: eventId } = await params;
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    const limit = takeRateLimit(`payment:submit:${session.userId}`, 30, 60 * 60 * 1000);
+    if (!limit.allowed) {
+      return rateLimitResponse(limit, "Too many payment submissions. Try again later.");
     }
 
-    const paymentReference = String(body.paymentReference || "").trim();
-    const paymentMethod = String(body.paymentMethod || "").trim();
+    const { id: eventId } = await params;
+    const parsed = await readJsonBody(request, MAX_BODY_BYTES);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
 
-    if (!paymentReference) {
+    const paymentReference =
+      typeof body.paymentReference === "string" ? body.paymentReference.trim() : "";
+    const paymentMethod =
+      typeof body.paymentMethod === "string" ? body.paymentMethod.trim() : "";
+
+    if (!paymentReference || paymentReference.length > MAX_REFERENCE_LENGTH) {
       return NextResponse.json({ error: "Payment reference is required" }, { status: 400 });
     }
-    if (!PAYMENT_METHODS.includes(paymentMethod)) {
+    if (paymentMethod.length > 30 || !PAYMENT_METHODS.includes(paymentMethod)) {
       return NextResponse.json({ error: "Select a valid payment method" }, { status: 400 });
     }
 
@@ -49,33 +57,45 @@ export async function POST(request: Request, { params }: RouteContext) {
       return NextResponse.json({ error: "Payment has already been verified" }, { status: 409 });
     }
 
-    const payment = currentPayment
-      ? await prisma.payment.update({
-          where: { id: currentPayment.id },
-          data: {
-            status: "SUBMITTED",
-            paymentReference,
-            paymentMethod,
-            submittedAt: new Date(),
-            rejectionReason: null,
-          },
-        })
-      : await prisma.payment.create({
-          data: {
-            eventId,
-            userId: session.userId,
-            pricingTierId: event.pricingTierId,
-            amount: event.quotedAmount,
-            currency: "TSH",
-            paymentReference,
-            paymentMethod,
-            submittedAt: new Date(),
-            status: "SUBMITTED",
-          },
-        });
-
-    // The admin review queue reads Payment records directly; the latest
-    // payment status above is now SUBMITTED.
+    let payment;
+    if (currentPayment) {
+      // Compare-and-set prevents a concurrent admin verification/rejection
+      // from being overwritten by a late client submission.
+      const updated = await prisma.payment.updateMany({
+        where: {
+          id: currentPayment.id,
+          status: { in: ["PENDING", "SUBMITTED", "REJECTED"] },
+        },
+        data: {
+          status: "SUBMITTED",
+          paymentReference,
+          paymentMethod,
+          submittedAt: new Date(),
+          rejectionReason: null,
+        },
+      });
+      if (updated.count !== 1) {
+        return NextResponse.json(
+          { error: "This payment has already been reviewed. Refresh the page." },
+          { status: 409 },
+        );
+      }
+      payment = await prisma.payment.findUnique({ where: { id: currentPayment.id } });
+    } else {
+      payment = await prisma.payment.create({
+        data: {
+          eventId,
+          userId: session.userId,
+          pricingTierId: event.pricingTierId,
+          amount: event.quotedAmount,
+          currency: "TSH",
+          paymentReference,
+          paymentMethod,
+          submittedAt: new Date(),
+          status: "SUBMITTED",
+        },
+      });
+    }
 
     return NextResponse.json({ success: true, payment }, { status: 200 });
   } catch (error) {

@@ -24,7 +24,7 @@ export default function ProfilePage() {
     try {
       const response = await fetch("/api/user/profile");
       const data = await response.json();
-      if (response.ok) setUser({ ...emptyProfile, ...data });
+      if (response.ok) setUser({ ...emptyProfile, ...data, phone: data.phone ?? "" });
       else setMessage(data.error || "Unable to load your profile.");
     } catch {
       setMessage("Unable to load your profile.");
@@ -50,7 +50,7 @@ export default function ProfilePage() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to update profile.");
-      setUser(data.user);
+      setUser({ ...data.user, phone: data.user.phone ?? "" });
       setIsEditing(false);
       setMessage("Profile updated successfully.");
     } catch (error) {

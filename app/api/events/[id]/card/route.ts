@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, getOwnedEvent } from "@/lib/session";
 import { recordAudit, clientIp } from "@/lib/audit";
+import { readJsonBody } from "@/lib/request";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -28,12 +29,9 @@ export async function POST(request: Request, { params }: RouteContext) {
       );
     }
 
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-    }
+    const parsed = await readJsonBody(request, 32 * 1024);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
 
     const theme = typeof body.theme === "string" ? body.theme.trim() : "";
     const accentColor =

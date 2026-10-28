@@ -1,20 +1,37 @@
 import { NextResponse } from "next/server";
+import sharp from "sharp";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/session";
 import { analyzeTemplateLayout, type TemplateLayout } from "@/lib/template-layout";
+import { recordAudit, clientIp } from "@/lib/audit";
+import { readJsonBody } from "@/lib/request";
+import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 /**
  * Card design templates (Step 10 groundwork).
  * Designs are uploaded from the admin's PC as an image file and stored as a
- * base64 data URL in `imageUrl` — there is no longer any price, description
+ * base64 data URL in `imageUrl` - there is no longer any price, description
  * or remote-URL entry (see migration 20261021110000).
  */
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB after decoding
+const MAX_BODY_BYTES = 6 * 1024 * 1024; // base64 expansion + JSON overhead
+const MAX_TITLE_LENGTH = 120;
+const MAX_IMAGE_DIMENSION = 10_000;
+const MAX_IMAGE_PIXELS = 40_000_000;
 
 /** data:image/<type>;base64,<payload> */
 const DATA_URL_RE = /^data:image\/(png|jpeg|webp|gif|avif);base64,([A-Za-z0-9+/]+={0,2})$/;
+
+/** Sharp reports AVIF as `heif` (and on some builds also `avif`). */
+const EXPECTED_FORMATS: Record<string, string[]> = {
+  png: ["png"],
+  jpeg: ["jpeg"],
+  webp: ["webp"],
+  gif: ["gif"],
+  avif: ["heif", "avif"],
+};
 
 /** Confirm the decoded bytes really are an image before storing them. */
 function hasImageSignature(bytes: Buffer): boolean {
@@ -34,15 +51,17 @@ function hasImageSignature(bytes: Buffer): boolean {
 
 export async function GET() {
   try {
-    if (!(await requireAdmin())) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!(await requireAdmin())) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
     const templates = await prisma.cardTemplate.findMany({
       orderBy: { createdAt: "desc" },
       include: { _count: { select: { events: true } } },
     });
     return NextResponse.json(templates, { status: 200 });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Internal server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Template list error:", error);
+    return NextResponse.json({ error: "Unable to load card designs" }, { status: 500 });
   }
 }
 
@@ -51,18 +70,33 @@ export async function POST(request: Request) {
     const admin = await requireAdmin();
     if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    const limit = takeRateLimit(
+      `template:upload:${admin.userId}`,
+      20,
+      60 * 60 * 1000,
+    );
+    if (!limit.allowed) {
+      return rateLimitResponse(limit, "Too many design uploads. Try again later.");
     }
 
-    const title = typeof body.title === "string" ? body.title.trim() : "";
-    const imageUrl = typeof body.imageUrl === "string" ? body.imageUrl : "";
+    const parsed = await readJsonBody(request, MAX_BODY_BYTES);
+    if (!parsed.ok) return parsed.response;
 
-    if (!title) return NextResponse.json({ error: "A design title is required" }, { status: 400 });
-    if (!imageUrl) return NextResponse.json({ error: "Choose an image file to upload" }, { status: 400 });
+    const title = typeof parsed.body.title === "string" ? parsed.body.title.trim() : "";
+    const imageUrl = typeof parsed.body.imageUrl === "string" ? parsed.body.imageUrl : "";
+
+    if (!title) {
+      return NextResponse.json({ error: "A design title is required" }, { status: 400 });
+    }
+    if (title.length > MAX_TITLE_LENGTH) {
+      return NextResponse.json(
+        { error: `Design title must be ${MAX_TITLE_LENGTH} characters or fewer.` },
+        { status: 400 },
+      );
+    }
+    if (!imageUrl) {
+      return NextResponse.json({ error: "Choose an image file to upload" }, { status: 400 });
+    }
 
     const match = DATA_URL_RE.exec(imageUrl);
     if (!match) {
@@ -72,6 +106,7 @@ export async function POST(request: Request) {
       );
     }
 
+    const mimeType = match[1];
     const bytes = Buffer.from(match[2], "base64");
     if (bytes.length === 0) {
       return NextResponse.json({ error: "The uploaded image is empty" }, { status: 400 });
@@ -84,6 +119,41 @@ export async function POST(request: Request) {
     }
     if (!hasImageSignature(bytes)) {
       return NextResponse.json({ error: "That file does not look like a valid image" }, { status: 400 });
+    }
+
+    // Decode the image with Sharp to reject spoofed files, truncated data and
+    // decompression bombs. The declared MIME type must match the real format.
+    let metadata: { format?: string; width?: number; height?: number };
+    try {
+      metadata = await sharp(bytes, {
+        limitInputPixels: MAX_IMAGE_PIXELS,
+        failOn: "error",
+      }).metadata();
+    } catch {
+      return NextResponse.json({ error: "That file does not look like a valid image" }, { status: 400 });
+    }
+
+    const format = metadata.format;
+    if (!format || !(EXPECTED_FORMATS[mimeType] ?? []).includes(format)) {
+      return NextResponse.json(
+        { error: "The image content does not match its file type" },
+        { status: 400 },
+      );
+    }
+
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+    if (
+      width < 1 ||
+      height < 1 ||
+      width > MAX_IMAGE_DIMENSION ||
+      height > MAX_IMAGE_DIMENSION ||
+      width * height > MAX_IMAGE_PIXELS
+    ) {
+      return NextResponse.json(
+        { error: "The image dimensions are too large. Use an image no larger than 10000 x 10000 pixels." },
+        { status: 413 },
+      );
     }
 
     // Read the design's placeholder words once, at upload time. A design
@@ -106,9 +176,24 @@ export async function POST(request: Request) {
       },
     });
 
+    await recordAudit({
+      actorId: admin.userId,
+      action: "template.uploaded",
+      entityType: "card_template",
+      entityId: newTemplate.id,
+      metadata: {
+        title,
+        format,
+        width,
+        height,
+        bytes: bytes.length,
+      },
+      ipAddress: clientIp(request),
+    });
+
     return NextResponse.json({ success: true, template: newTemplate }, { status: 201 });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Internal server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Template upload error:", error);
+    return NextResponse.json({ error: "Unable to upload the card design" }, { status: 500 });
   }
 }

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
+import { validateDatabaseUrl } from "./lib/database-url";
 
 function migrationUrl() {
   const directUrl = process.env.DIRECT_URL;
@@ -12,6 +13,7 @@ function migrationUrl() {
     );
   }
 
+  validateDatabaseUrl(url);
   return url;
 }
 

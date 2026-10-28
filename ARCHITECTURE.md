@@ -581,6 +581,35 @@ Rules:
   a server start also pays a one-off ~7 s fontconfig cache build; database
   roundtrips dominate normal request time.
 
+### Admin Overrides
+
+Administrators can correct client, event, guest, card and attendance data without
+taking ownership of the event. The surface is separate from organizer APIs:
+
+- `/admin/overrides` is protected by the page proxy; every `/api/admin/overrides/*`
+  route independently calls `requireAdmin()` and returns 403 to organizers,
+  unauthenticated callers and any non-ADMIN role.
+- Client corrections cover name, email, username and phone. Role and
+  authorization status remain on `/api/admin/users`.
+- Event corrections cover title, type, couple names, description, location,
+  start/end time and the active card design. Status changes are limited to
+  `AUTHORIZED ↔ SUSPENDED`; reactivation still requires a verified payment.
+- Guest corrections cover name, phone, WhatsApp and `STANDARD`/`PREMIUM` card
+  type. Name/quality changes invalidate the cached PNG and re-render it when an
+  active design exists; contact changes reset delivery to `NOT_SENT`.
+- Card regeneration explicitly re-renders one guest's PNG. It is allowed on a
+  suspended event through the `allowInactiveEvent` render option, but still
+  requires an ACTIVE assigned design.
+- Attendance corrections normalise status/timestamp combinations:
+  `CHECKED_IN` always has a timestamp, `REGISTERED`/`NO_SHOW` clear it, and
+  `LEFT` may retain the original scan time.
+- Every successful override writes an `AuditLog` row with the admin actor,
+  action, target entity/id, before/after metadata, IP address and the automatic
+  `createdAt` timestamp. Admin override actions use `client.admin_updated`,
+  `event.admin_updated`, `event.suspended`, `event.reactivated`,
+  `guest.admin_updated`, `guest.card_regenerated` and
+  `attendance.admin_corrected`.
+
 ## API Routes Structure
 
 ```
@@ -607,8 +636,30 @@ app/api/
 │   │   └── [id]/
 │   │       └── route.ts      (DELETE - Remove a design; event assignments SetNull,
 │   │                          audited as template.deleted)
-│   └── users/
-│       └── route.ts          (GET - Users + owned-data counts; PATCH - role/authorization; DELETE - remove unused account)
+│   ├── users/
+│   │   └── route.ts          (GET - Users + owned-data counts; PATCH - role/authorization; DELETE - remove unused account)
+│   └── overrides/
+│       ├── route.ts          (GET - Client accounts + event summaries; admin only)
+│       ├── clients/
+│       │   └── [id]/
+│       │       └── route.ts  (PATCH - Correct client name/email/username/phone; audited)
+│       └── events/
+│           └── [id]/
+│               ├── route.ts  (GET - Full event, owner, guests/attendance, payments,
+│               │              active designs; PATCH - Correct event details/design; audited)
+│               ├── status/
+│               │   └── route.ts (PATCH - Suspend or reactivate; reactivation requires
+│               │                  a verified payment; audited)
+│               └── guests/
+│                   └── [guestId]/
+│                       ├── route.ts      (PATCH - Correct guest name/phone/WhatsApp/card
+│                       │                  type; re-renders card; audited)
+│                       ├── card/
+│                       │   └── route.ts  (POST - Regenerate one card, including on a
+│                       │                  suspended event; audited)
+│                       └── attendance/
+│                           └── route.ts  (PATCH - Correct status, check-in timestamp
+│                                          and notes; audited)
 │
 ├── events/
 │   ├── route.ts              (GET - List user events, POST - Create event with server-side quote)
@@ -732,8 +783,13 @@ app/
 │   │   └── page.tsx           (Payment review: verify/reject, authorize/suspend event)
 │   ├── pricing/
 │   │   └── page.tsx           (Pricing tier management)
-│   └── users/
-│       └── page.tsx           (Account manager: role, authorization, guarded deletion)
+│   ├── users/
+│   │   └── page.tsx           (Account manager: role, authorization, guarded deletion)
+│   └── overrides/
+│       └── page.tsx           (Admin-only controlled overrides: client profile edits,
+│                               event details/status, guest corrections, card
+│                               regeneration and attendance correction; every write
+│                               is shown as audited)
 │
 └── dev/
     └── db/
@@ -789,7 +845,8 @@ lib/
 │                            from template edge pixels, adds title/name/quality
 │                            + QR; legacy fallback when no placeholders)
 ├── card-generation.ts      (resolveTemplateLayout(), buildCardFingerprint(),
-│                            generateCardsForGuests() - cached PNG + concurrency)
+│                            generateCardsForGuests() - cached PNG + concurrency;
+│                            admin override option allows repair on suspended events)
 ├── template-layout.ts      (analyzeTemplateLayout() - tesseract.js OCR, white
 │                            QR-panel flood fill, layout parsing/validation)
 ├── guests.ts               (Step 8 guest validation, duplicate detection and
@@ -940,7 +997,10 @@ Notes:
 
 5. **Audit Trail**
    - AuditLog model tracks all system actions
-   - Records actor, action, entity type, and metadata
+   - Records actor, action, target entity type/id, before/after metadata and an
+     automatic timestamp
+   - Admin overrides covered: client info, event info/status, guest details,
+     card regeneration and attendance corrections
    - IP address tracking for security
 
 6. **Guest Management & QR Tickets (Steps 8–9)**

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { generateQrToken } from "@/lib/qr";
+import type { Prisma } from "@/app/generated/prisma/client";
 
 /**
  * Guest management service (Step 8) with server-side QR token issuance
@@ -128,11 +129,19 @@ export function validateGuestRow(input: GuestInput): { ok: true; row: GuestRow }
  * duplicates inside the batch) and creates the survivors in one batch.
  * Each new guest gets a fresh QR token — existing guests are untouched.
  */
+export async function lockEventForGuestWrite(
+  tx: Prisma.TransactionClient,
+  eventId: string,
+): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM events WHERE id = ${eventId}::uuid FOR UPDATE`;
+}
+
 export async function createGuestsForEvent(
   eventId: string,
   inputs: GuestInput[],
+  tx: Prisma.TransactionClient = prisma,
 ): Promise<CreateGuestsResult> {
-  const existing = await prisma.guest.findMany({
+  const existing = await tx.guest.findMany({
     where: { eventId },
     select: { fullName: true, email: true },
   });
@@ -168,7 +177,7 @@ export async function createGuestsForEvent(
 
   const createdRows =
     rows.length > 0
-      ? await prisma.guest.createManyAndReturn({
+      ? await tx.guest.createManyAndReturn({
           data: rows.map((row) => ({ eventId, ...row })),
           select: { id: true },
         })

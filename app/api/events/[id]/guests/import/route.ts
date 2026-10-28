@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, getOwnedEvent } from "@/lib/session";
-import { createGuestsForEvent, GuestInput } from "@/lib/guests";
+import { createGuestsForEvent, GuestInput, lockEventForGuestWrite } from "@/lib/guests";
 import { generateCardsForGuests } from "@/lib/card-generation";
 import { recordAudit, clientIp } from "@/lib/audit";
+import { readJsonBody, readTextBody } from "@/lib/request";
+import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 const MAX_ROWS = 2000;
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
 /**
  * CSV bulk import (Step 8).
@@ -22,6 +25,11 @@ export async function POST(request: Request, { params }: RouteContext) {
     const { id: eventId } = await params;
     const event = await getOwnedEvent(eventId, session.userId);
     if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
+
+    const limit = takeRateLimit(`guests:import:${session.userId}`, 10, 60 * 1000);
+    if (!limit.allowed) {
+      return rateLimitResponse(limit, "Too many guest imports. Try again later.");
+    }
     if (event.status !== "AUTHORIZED") {
       return NextResponse.json(
         { error: "This event must be authorized before guests can be managed" },
@@ -34,20 +42,21 @@ export async function POST(request: Request, { params }: RouteContext) {
     let rawRowCount = 0;
 
     if (contentType.includes("application/json")) {
-      let body: Record<string, unknown>;
-      try {
-        body = await request.json();
-      } catch {
-        return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      const parsedBody = await readJsonBody(request, MAX_BODY_BYTES);
+      if (!parsedBody.ok) return parsedBody.response;
+      const list = Array.isArray(parsedBody.body.guests) ? parsedBody.body.guests : null;
+      if (!list) {
+        return NextResponse.json({ error: "A `guests` array is required." }, { status: 400 });
       }
-      const list = Array.isArray(body.guests) ? body.guests : null;
-      if (!list) return NextResponse.json({ error: "A `guests` array is required." }, { status: 400 });
       rawRowCount = list.length;
       rows = list.slice(0, MAX_ROWS) as GuestInput[];
     } else {
-      const text = await request.text();
-      if (!text.trim()) return NextResponse.json({ error: "CSV file is empty." }, { status: 400 });
-      const parsed = parseCsv(text);
+      const parsedBody = await readTextBody(request, MAX_BODY_BYTES);
+      if (!parsedBody.ok) return parsedBody.response;
+      if (!parsedBody.text.trim()) {
+        return NextResponse.json({ error: "CSV file is empty." }, { status: 400 });
+      }
+      const parsed = parseCsv(parsedBody.text);
       if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
       rawRowCount = parsed.rows.length;
       rows = parsed.rows.slice(0, MAX_ROWS);
@@ -59,26 +68,37 @@ export async function POST(request: Request, { params }: RouteContext) {
 
     // Pricing-tier capacity governs the list size (e.g. the 1-100 tier tops
     // out at 100 guests) — a CSV import may never push past the tier limit.
-    const [existingCount, tier] = await Promise.all([
-      prisma.guest.count({ where: { eventId } }),
-      prisma.pricingTier.findUnique({ where: { id: event.pricingTierId } }),
-    ]);
-    const capacity = tier?.maxGuests ?? event.guestCount;
-    if (existingCount + rows.length > capacity) {
-      const remaining = Math.max(0, capacity - existingCount);
-      const plan = tier ? `The ${tier.minGuests}-${tier.maxGuests} guest tier` : "This pricing plan";
-      return NextResponse.json(
-        {
+    const outcome = await prisma.$transaction(async (tx) => {
+      await lockEventForGuestWrite(tx, eventId);
+
+      const [existingCount, tier] = await Promise.all([
+        tx.guest.count({ where: { eventId } }),
+        tx.pricingTier.findUnique({ where: { id: event.pricingTierId } }),
+      ]);
+      const capacity = tier?.maxGuests ?? event.guestCount;
+      if (existingCount + rows.length > capacity) {
+        const remaining = Math.max(0, capacity - existingCount);
+        const plan = tier
+          ? `The ${tier.minGuests}-${tier.maxGuests} guest tier`
+          : "This pricing plan";
+        return {
+          ok: false as const,
+          status: 409,
           error:
             `${plan} allows up to ${capacity} guest(s); ${existingCount} already on the list ` +
             `(${remaining} slot${remaining === 1 ? "" : "s"} left). Import ${remaining} or fewer rows, ` +
             `or choose a larger tier.`,
-        },
-        { status: 409 },
-      );
-    }
+        };
+      }
 
-    const result = await createGuestsForEvent(eventId, rows);
+      const result = await createGuestsForEvent(eventId, rows, tx);
+      return { ok: true as const, result };
+    });
+
+    if (!outcome.ok) {
+      return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+    }
+    const result = outcome.result;
 
     // Prepare a card for every newly imported guest, using the event's
     // selected design. Individual render failures leave that guest PENDING

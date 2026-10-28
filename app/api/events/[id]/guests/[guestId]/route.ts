@@ -5,6 +5,9 @@ import { getSession, getOwnedEvent } from "@/lib/session";
 import { cleanPhone, CARD_TYPES, GUEST_PUBLIC_SELECT } from "@/lib/guests";
 import { generateCardsForGuests } from "@/lib/card-generation";
 import { recordAudit, clientIp } from "@/lib/audit";
+import { readJsonBody } from "@/lib/request";
+import { validateEmail } from "@/lib/auth";
+import { takeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type RouteContext = { params: Promise<{ id: string; guestId: string }> };
 
@@ -60,12 +63,18 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     if ("error" in gate) return gate.error;
     const { session, guest } = gate;
 
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    const updateLimit = takeRateLimit(
+      `guest:update:${session.userId}`,
+      60,
+      60 * 1000,
+    );
+    if (!updateLimit.allowed) {
+      return rateLimitResponse(updateLimit, "Too many guest updates. Try again later.");
     }
+
+    const parsed = await readJsonBody(request, 32 * 1024);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
 
     // Status is server-owned: generation follows rendering, and delivery
     // follows provider confirmation. Clients cannot mark a card as sent.
@@ -80,7 +89,10 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     const before: Record<string, unknown> = {};
 
     if (body.fullName !== undefined) {
-      const fullName = String(body.fullName).trim();
+      if (typeof body.fullName !== "string") {
+        return NextResponse.json({ error: "Guest name must be text." }, { status: 400 });
+      }
+      const fullName = body.fullName.trim();
       if (!fullName || fullName.length > 120) {
         return NextResponse.json({ error: "Guest name is required (max 120 characters)." }, { status: 400 });
       }
@@ -104,9 +116,15 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     }
 
     if (body.email !== undefined) {
-      const email = String(body.email).trim().toLowerCase() || null;
-      if (email && email.length > 254) {
-        return NextResponse.json({ error: "Email address is too long." }, { status: 400 });
+      if (body.email !== null && typeof body.email !== "string") {
+        return NextResponse.json({ error: "Email address must be text." }, { status: 400 });
+      }
+      const email = typeof body.email === "string" ? body.email.trim().toLowerCase() || null : null;
+      if (email) {
+        const emailError = validateEmail(email);
+        if (emailError) {
+          return NextResponse.json({ error: emailError }, { status: 400 });
+        }
       }
       if (email !== guest.email) {
         const dupe = email
@@ -124,7 +142,10 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     }
 
     if (body.cardType !== undefined) {
-      const cardType = String(body.cardType).toUpperCase();
+      if (typeof body.cardType !== "string") {
+        return NextResponse.json({ error: "Card type must be STANDARD or PREMIUM." }, { status: 400 });
+      }
+      const cardType = body.cardType.toUpperCase();
       if (!(CARD_TYPES as readonly string[]).includes(cardType)) {
         return NextResponse.json({ error: "Card type must be STANDARD or PREMIUM." }, { status: 400 });
       }
@@ -201,6 +222,15 @@ export async function DELETE(request: Request, { params }: RouteContext) {
     const gate = await loadContext(eventId, guestId);
     if ("error" in gate) return gate.error;
     const { session, guest } = gate;
+
+    const deleteLimit = takeRateLimit(
+      `guest:delete:${session.userId}`,
+      30,
+      60 * 1000,
+    );
+    if (!deleteLimit.allowed) {
+      return rateLimitResponse(deleteLimit, "Too many guest deletions. Try again later.");
+    }
 
     const checkedIn = guest.attendances.some((a) => a.status === "CHECKED_IN");
     if (checkedIn) {
