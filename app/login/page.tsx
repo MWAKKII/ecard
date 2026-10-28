@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -26,11 +24,10 @@ export default function LoginPage() {
 
       if (!res.ok) throw new Error(data.error || "Login failed");
 
-      if (data.role === "ADMIN") {
-        router.push("/admin");
-      } else {
-        router.push("/dashboard");
-      }
+      // Use a full navigation after login. The proxy must see the new auth
+      // cookie immediately; a client-side push can reuse a cached pre-login
+      // redirect and leave the button stuck on "Signing in...".
+      window.location.assign(data.role === "ADMIN" ? "/admin" : "/dashboard");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed");
       setLoading(false);
@@ -55,7 +52,10 @@ export default function LoginPage() {
         <div className="backdrop-blur-2xl bg-white/80 border border-white/90 p-8 rounded-[32px] shadow-[0_20px_50px_rgba(0,0,0,0.08)] transition-all duration-300">
           
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-600 p-3.5 rounded-2xl mb-6 text-xs font-semibold animate-in fade-in">
+            <div
+              role="alert"
+              className="bg-red-50 border border-red-200 text-red-600 p-3.5 rounded-2xl mb-6 text-xs font-semibold animate-in fade-in"
+            >
               {error}
             </div>
           )}
