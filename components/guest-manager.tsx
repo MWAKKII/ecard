@@ -50,13 +50,66 @@ interface EventInfo {
   pricingTier: { id: string; minGuests: number; maxGuests: number; price: number } | null;
 }
 
-const ATTENDANCE_OPTIONS = ["", "REGISTERED", "CHECKED_IN", "NO_SHOW", "LEFT"];
+const ATTENDANCE_LABELS: Record<string, string> = {
+  REGISTERED: "Registered",
+  CHECKED_IN: "Checked in",
+  NO_SHOW: "No show",
+  LEFT: "Left",
+};
+
+const ATTENDANCE_FILTERS = ["REGISTERED", "CHECKED_IN", "NO_SHOW", "LEFT"];
 
 function attendanceOf(guest: Guest): string {
   return guest.attendances[0]?.status || "REGISTERED";
 }
 
+function attendanceLabel(status: string): string {
+  return (
+    ATTENDANCE_LABELS[status] ??
+    status
+      .replace(/_/g, " ")
+      .toLowerCase()
+      .replace(/\b\w/g, (character) => character.toUpperCase())
+  );
+}
 
+function attendanceBadgeClass(status: string): string {
+  if (status === "CHECKED_IN") return "bg-emerald-100 text-emerald-700";
+  if (status === "NO_SHOW") return "bg-red-100 text-red-700";
+  if (status === "LEFT") return "bg-gray-200 text-gray-600";
+  return "bg-sky-100 text-sky-700";
+}
+
+function cardTypeLabel(cardType: Guest["cardType"]): string {
+  return cardType === "PREMIUM" ? "Premium" : "Standard";
+}
+
+function cardGeneratedState(guest: Guest, hasTemplate: boolean) {
+  if (guest.cardStatus === "PENDING") {
+    return {
+      label: "Pending",
+      className: "bg-amber-100 text-amber-700",
+      title: hasTemplate
+        ? "The personalized card has not been generated yet. Open Card to retry."
+        : "Choose an E-Card design in the Event details tab to generate this card.",
+    };
+  }
+
+  return {
+    label: "Generated",
+    className: "bg-blue-100 text-blue-700",
+    title: "The personalized card is generated and ready to preview, download, or send.",
+  };
+}
+
+function TotalCard({ label, value, tone }: { label: string; value: string | number; tone: string }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500">{label}</p>
+      <p className={`mt-1.5 text-2xl font-bold ${tone}`}>{value}</p>
+    </div>
+  );
+}
 
 function CapacityMeter({ used, capacity, tierName }: { used: number; capacity: number | null; tierName: string | null }) {
   if (capacity === null) return null;
@@ -159,15 +212,42 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const phoneQuery = /^[\d\s+()-]+$/.test(q) ? q.replace(/\D/g, "") : "";
     return guests.filter((g) => {
-      if (q && !g.fullName.toLowerCase().includes(q) && !(g.email || "").toLowerCase().includes(q) && !(g.phone || "").includes(q)) {
-        return false;
+      if (q) {
+        const textValues = [g.fullName, g.email, g.phone, g.whatsapp].filter(Boolean) as string[];
+        const textMatch = textValues.some((value) => value.toLowerCase().includes(q));
+        const phoneMatch =
+          phoneQuery.length > 0 &&
+          [g.phone, g.whatsapp].some((value) =>
+            (value || "").replace(/\D/g, "").includes(phoneQuery),
+          );
+        if (!textMatch && !phoneMatch) return false;
       }
       if (cardFilter && g.cardType !== cardFilter) return false;
       if (attendanceFilter && attendanceOf(g) !== attendanceFilter) return false;
       return true;
     });
   }, [guests, search, cardFilter, attendanceFilter]);
+
+  const totals = useMemo(() => {
+    const total = guests.length;
+    const attended = guests.filter((guest) => attendanceOf(guest) === "CHECKED_IN").length;
+    return {
+      total,
+      attended,
+      notAttended: total - attended,
+      percent: total > 0 ? Math.round((attended / total) * 100) : 0,
+    };
+  }, [guests]);
+
+  const filtersActive = Boolean(search.trim() || cardFilter || attendanceFilter);
+
+  function clearFilters() {
+    setSearch("");
+    setCardFilter("");
+    setAttendanceFilter("");
+  }
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -272,7 +352,7 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
             <h1 className="text-3xl font-bold tracking-tight text-gray-900">Guests</h1>
             <p className="text-sm text-gray-500 mt-1">
               {event?.title ? `${event.title} — ` : ""}
-              {guests.length} guest{guests.length === 1 ? "" : "s"} on the list
+              {totals.total} guest{totals.total === 1 ? "" : "s"} on the list
             </p>
           </div>
           <div className="flex gap-3">
@@ -300,8 +380,25 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
         </div>
       ) : (
         <>
+          <section className="mb-6" aria-labelledby="guest-list-totals">
+            <div className="mb-3">
+              <h2 id="guest-list-totals" className="text-lg font-bold text-gray-900">
+                Event totals
+              </h2>
+              <p className="text-xs text-gray-500">
+                Whole guest list — the filters below do not change these totals.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <TotalCard label="Total guests" value={totals.total} tone="text-gray-900" />
+              <TotalCard label="Attended" value={totals.attended} tone="text-emerald-600" />
+              <TotalCard label="Not attended" value={totals.notAttended} tone="text-amber-600" />
+              <TotalCard label="Attendance %" value={`${totals.percent}%`} tone="text-blue-600" />
+            </div>
+          </section>
+
           <CapacityMeter
-            used={guests.length}
+            used={totals.total}
             capacity={capacity}
             tierName={event?.pricingTier ? `${event.pricingTier.minGuests}-${event.pricingTier.maxGuests}` : null}
           />
@@ -343,26 +440,40 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
           )}
 
           {/* Search, filters, CSV import */}
-          <div className="bg-white border rounded-xl p-4 mb-6 shadow-sm flex flex-wrap gap-3 items-center">
+          <div className="bg-white border rounded-xl p-4 mb-3 shadow-sm flex flex-wrap gap-3 items-center">
             <input
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name, email or phone..."
+              placeholder="Search name, email, phone or WhatsApp..."
+              aria-label="Search guests"
               className="flex-1 min-w-[220px] rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
             />
-            <select value={cardFilter} onChange={(e) => setCardFilter(e.target.value)}
-              className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100">
+            <select
+              value={cardFilter}
+              onChange={(e) => setCardFilter(e.target.value)}
+              aria-label="Filter by card type"
+              className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100"
+            >
               <option value="">All card types</option>
               <option value="STANDARD">Standard</option>
               <option value="PREMIUM">Premium</option>
             </select>
-            <select value={attendanceFilter} onChange={(e) => setAttendanceFilter(e.target.value)}
-              className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100">
+            <select
+              value={attendanceFilter}
+              onChange={(e) => setAttendanceFilter(e.target.value)}
+              aria-label="Filter by attendance"
+              className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100"
+            >
               <option value="">All attendance</option>
-              {ATTENDANCE_OPTIONS.filter(Boolean).map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
+              {ATTENDANCE_FILTERS.map((status) => (
+                <option key={status} value={status}>
+                  {attendanceLabel(status)}
+                </option>
+              ))}
             </select>
             <button
+              type="button"
               onClick={() => setShowForm((v) => !v)}
               disabled={full}
               title={full ? "Tier capacity reached" : undefined}
@@ -386,6 +497,23 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
             </label>
           </div>
 
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+            <span>
+              Showing <span className="font-semibold text-gray-700">{filtered.length}</span> of{" "}
+              <span className="font-semibold text-gray-700">{totals.total}</span>{" "}
+              guest{totals.total === 1 ? "" : "s"}
+            </span>
+            {filtersActive && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="font-semibold text-blue-600 hover:underline"
+              >
+                Clear search &amp; filters
+              </button>
+            )}
+          </div>
+
           {event && !event.cardTemplateId && (
             <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
               Choose an E-Card design in the <span className="font-bold">Event details</span> tab to enable personalized
@@ -395,78 +523,103 @@ export default function GuestManager({ eventId, compact = false }: { eventId: st
 
           {/* Guest table */}
           <div className="bg-white border rounded-xl shadow-sm overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left text-sm">
+            <table className="w-full min-w-[1050px] text-left text-sm">
               <thead>
                 <tr className="border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500">
-                  <th className="px-4 py-3 font-semibold">Guest</th>
-                  <th className="px-4 py-3 font-semibold">Phone / WhatsApp</th>
-                  <th className="px-4 py-3 font-semibold">Card</th>
-                  <th className="px-4 py-3 font-semibold">Card status</th>
-                  <th className="px-4 py-3 font-semibold">Delivery</th>
-                  <th className="px-4 py-3 font-semibold">Attendance</th>
-                  <th className="px-4 py-3 font-semibold">Scan time</th>
-                  <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                  <th scope="col" className="px-4 py-3 font-semibold">Guest name</th>
+                  <th scope="col" className="px-4 py-3 font-semibold">Phone</th>
+                  <th scope="col" className="px-4 py-3 font-semibold">WhatsApp</th>
+                  <th scope="col" className="px-4 py-3 font-semibold">Card type</th>
+                  <th scope="col" className="px-4 py-3 font-semibold">Card generated</th>
+                  <th scope="col" className="px-4 py-3 font-semibold">Attendance status</th>
+                  <th scope="col" className="px-4 py-3 font-semibold">Scan time</th>
+                  <th scope="col" className="px-4 py-3 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-4 py-10 text-center text-gray-400">
-                      {guests.length === 0 ? "No guests yet. Add a guest or import a CSV." : "No guests match your filters."}
+                      {guests.length === 0 ? (
+                        "No guests yet. Add a guest or import a CSV."
+                      ) : (
+                        <div className="flex flex-col items-center gap-2">
+                          <span>No guests match your filters.</span>
+                          <button
+                            type="button"
+                            onClick={clearFilters}
+                            className="font-semibold text-blue-600 hover:underline"
+                          >
+                            Clear search &amp; filters
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ) : (
                   filtered.map((guest) => {
                     const attendance = attendanceOf(guest);
                     const scanTime = guest.attendances[0]?.checkedInAt;
+                    const cardState = cardGeneratedState(guest, Boolean(event?.cardTemplateId));
                     return (
                       <tr key={guest.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/60">
                         <td className="px-4 py-3">
                           <div className="font-semibold text-gray-900">{guest.fullName}</div>
                           {guest.email && <div className="text-xs text-gray-500">{guest.email}</div>}
                         </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">
+                          {guest.phone || "—"}
+                        </td>
                         <td className="px-4 py-3 text-gray-600">
-                          <div>{guest.phone || "—"}</div>
-                          {guest.whatsapp && <div className="text-xs text-gray-400">WA: {guest.whatsapp}</div>}
+                          <div className="whitespace-nowrap">{guest.whatsapp || "—"}</div>
+                          {!guest.whatsapp && guest.phone && (
+                            <div className="text-[11px] text-gray-400">Uses phone number</div>
+                          )}
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            <span
+                              title={guest.deliveryError || "WhatsApp delivery status"}
+                              className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${DELIVERY_STATUS_BADGE[guest.deliveryStatus]}`}
+                            >
+                              {DELIVERY_STATUS_LABEL[guest.deliveryStatus]}
+                            </span>
+                            {guest.deliveryStatus === "SENT" && guest.deliveredAt && (
+                              <span className="text-[11px] text-gray-400">
+                                {new Date(guest.deliveredAt).toLocaleString()}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3">
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${guest.cardType === "PREMIUM" ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"}`}>
-                            {guest.cardType}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${
-                            guest.cardStatus === "PENDING" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
-                            {guest.cardStatus === "PENDING" ? "PENDING" : "READY"}
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                              guest.cardType === "PREMIUM"
+                                ? "bg-purple-100 text-purple-700"
+                                : "bg-gray-100 text-gray-600"
+                            }`}
+                          >
+                            {cardTypeLabel(guest.cardType)}
                           </span>
                         </td>
                         <td className="px-4 py-3">
                           <span
-                            title={guest.deliveryError || undefined}
-                            className={`rounded-full px-2.5 py-1 text-xs font-bold ${DELIVERY_STATUS_BADGE[guest.deliveryStatus]}`}
+                            title={cardState.title}
+                            className={`rounded-full px-2.5 py-1 text-xs font-bold ${cardState.className}`}
                           >
-                            {DELIVERY_STATUS_LABEL[guest.deliveryStatus]}
+                            {cardState.label}
                           </span>
-                          {guest.deliveryStatus === "SENT" && guest.deliveredAt && (
-                            <div className="mt-1 text-[11px] text-gray-400">
-                              {new Date(guest.deliveredAt).toLocaleString()}
-                            </div>
-                          )}
                         </td>
                         <td className="px-4 py-3">
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${
-                            attendance === "CHECKED_IN" ? "bg-emerald-100 text-emerald-700"
-                            : attendance === "NO_SHOW" ? "bg-red-100 text-red-700"
-                            : attendance === "LEFT" ? "bg-gray-200 text-gray-600"
-                            : "bg-sky-100 text-sky-700"}`}>
-                            {attendance.replace("_", " ")}
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-bold ${attendanceBadgeClass(attendance)}`}
+                          >
+                            {attendanceLabel(attendance)}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-500">
+                        <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">
                           {scanTime ? new Date(scanTime).toLocaleString() : "—"}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex justify-end gap-3 text-xs font-semibold">
+                          <div className="flex justify-end gap-3 whitespace-nowrap text-xs font-semibold">
                             <a
                               href={`/api/events/${eventId}/guests/${guest.id}/qr`}
                               target="_blank"
