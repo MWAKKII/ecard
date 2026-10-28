@@ -618,6 +618,9 @@ app/api/
 │       │   └── route.ts      (GET - Card details, POST - Configure card)
 │       ├── pay/
 │       │   └── route.ts      (POST - Submit event payment)
+│       ├── scan/
+│       │   └── route.ts      (POST - Atomic QR check-in: owner + AUTHORIZED,
+│       │                      token/event validation, duplicate-safe timestamp)
 │       └── guests/
 │           ├── route.ts      (GET - List guests (qrToken/cardPng excluded), POST - Add
 │           │                  guest + immediately render their card, capped at the
@@ -706,7 +709,7 @@ app/
 │   └── [id]/
 │       ├── page.tsx           (Event workspace — tabbed client dashboard (spec
 │       │                       section 10): Dashboard summary, Guest list,
-│       │                       Event details, Scan E-Card [Step 11 placeholder],
+│       │                       Event details, Scan E-Card (camera QR check-in),
 │       │                       Reports [Step 12 placeholder]; capacity meter
 │       │                       driven by the event's pricing tier)
 │       ├── pay/
@@ -933,8 +936,15 @@ Notes:
      against the matching pricing tier
    - Event workspace at /events/[id] (spec section 10, "Client Dashboard"):
      tabbed dashboard with attendance summary (total / attended / not
-     attended / %), guest list, event details, and placeholder tabs for
-     scanning (Step 11) and reports (Step 12)
+     attended / %), guest list, event details, event-day scanner and a
+     reports placeholder (Step 12)
+   - Event-day scanner (Step 11): the browser requests camera permission,
+     decodes the QR locally and sends only the opaque token to
+     `POST /api/events/[id]/scan`. The server requires the authenticated
+     event owner, an AUTHORIZED event, an existing token for that event, and
+     an unused attendance row. The first valid scan atomically writes
+     `CHECKED_IN` and the exact timestamp; duplicate and concurrent scans
+     return that original timestamp without overwriting it
    - The pricing tier's maxGuests is the hard guest capacity: enforced
      server-side on add and CSV import (409 past the limit) and surfaced
      in the UI as a capacity meter that disables adding/importing when full

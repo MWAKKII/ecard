@@ -4,13 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import GuestManager from "@/components/guest-manager";
+import EventQrScanner from "@/components/event-qr-scanner";
 
 /**
  * Event workspace — the screen a client lands on after clicking an event
  * (spec section 10, "Client Dashboard"): a tabbed view with Dashboard
  * summary, Guest List, Event Details, Scan E-Card and Reports.
- * Scan and Reports arrive in spec Steps 11 and 12 — they are placeholders
- * until then.
+ * Reports arrives in spec Step 12 and remains a placeholder until then.
  */
 
 type Tab = "dashboard" | "guests" | "details" | "scan" | "reports";
@@ -393,16 +393,19 @@ export default function EventWorkspacePage() {
           </div>
         )}
 
-        {tab === "scan" && (
-          <div className="rounded-xl border border-dashed border-gray-300 bg-white p-12 text-center">
-            <p className="text-4xl">📷</p>
-            <h2 className="mt-3 text-lg font-bold text-gray-900">Scan E-Card</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              The camera QR scanner arrives in <span className="font-semibold">Step 11</span> of the build guide.
-              Every guest&apos;s ticket QR image is already available from the Guest list tab.
-            </p>
-          </div>
-        )}
+        {tab === "scan" &&
+          (authorized ? (
+            <EventQrScanner eventId={eventId} eventTitle={event.title} />
+          ) : (
+            <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50 p-12 text-center">
+              <p className="text-4xl">🔒</p>
+              <h2 className="mt-3 text-lg font-bold text-amber-900">Scanning is locked</h2>
+              <p className="mt-1 text-sm text-amber-800">
+                This event is {event.status.toLowerCase()}. Ticket scanning opens once the administrator
+                authorizes the event.
+              </p>
+            </div>
+          ))}
 
         {tab === "reports" && (
           <div className="rounded-xl border border-dashed border-gray-300 bg-white p-12 text-center">
