@@ -46,6 +46,7 @@
 │  • bcrypt for password hashing                                               │
 │  • qrcode (server-side QR token PNG rendering)                               │
 │  • sharp (server-side PNG compositing: template + guest name + QR)           │
+│  • PDFKit (post-event report PDF generation)                                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -621,6 +622,10 @@ app/api/
 │       ├── scan/
 │       │   └── route.ts      (POST - Atomic QR check-in: owner + AUTHORIZED,
 │       │                      token/event validation, duplicate-safe timestamp)
+│       ├── report/
+│       │   └── route.ts      (GET - Read-only post-event report: totals, percentages,
+│       │                      card-type breakdown, full guest list; owner only;
+│       │                      ?format=csv and ?format=pdf downloads; no write handlers)
 │       └── guests/
 │           ├── route.ts      (GET - List guests (qrToken/cardPng excluded), POST - Add
 │           │                  guest + immediately render their card, capped at the
@@ -710,8 +715,9 @@ app/
 │       ├── page.tsx           (Event workspace — tabbed client dashboard (spec
 │       │                       section 10): Dashboard summary, Guest list,
 │       │                       Event details, Scan E-Card (camera QR check-in),
-│       │                       Reports [Step 12 placeholder]; capacity meter
-│       │                       driven by the event's pricing tier)
+│       │                       read-only post-event Reports (totals, card-type
+│       │                       breakdown, full guest list, PDF/CSV downloads);
+│       │                       capacity meter driven by the event's pricing tier)
 │       ├── pay/
 │       │   └── page.tsx       (Payment submission page)
 │       └── guests/
@@ -793,6 +799,12 @@ lib/
 │                            detection, Meta Cloud API media + image message,
 │                            strict success only when a message id is returned)
 ├── delivery-status.ts      (Shared client-safe delivery labels/badge classes)
+├── reports.ts              (Step 12 report service: post-event gate, one-query
+│                            totals/card-type breakdown/full guest list; owner only)
+├── report-types.ts         (Client-safe report shapes shared by API and UI)
+├── report-format.ts        (Shared attendance/card labels, dates and percentages)
+├── report-export.ts        (Server-only exports: RFC-4180 CSV with UTF-8 BOM and
+│                            PDFKit PDF with summary, breakdown and full guest table)
 ├── events.ts               (Server-side price quoting from active tiers,
 │                            event ownership/status helpers)
 └── prisma.ts               (Prisma client singleton)
@@ -806,6 +818,9 @@ components/
 │                             capacity, search/filters, scan-time and delivery
 │                             status columns, gate for non-AUTHORIZED events,
 │                             Card action for delivery)
+├── event-report.tsx         (Read-only Reports tab: locked/loading/error states,
+│                             summary metrics, card-type breakdown, full guest
+│                             list and PDF/CSV download links; no edit controls)
 └── guest-card-dialog.tsx    (Personalized PNG preview + Download + server-side
                               WhatsApp delivery + manual WhatsApp fallback;
                               checks provider configuration, shows NOT
@@ -937,7 +952,7 @@ Notes:
    - Event workspace at /events/[id] (spec section 10, "Client Dashboard"):
      tabbed dashboard with attendance summary (total / attended / not
      attended / %), guest list, event details, event-day scanner and a
-     reports placeholder (Step 12)
+     read-only post-event report
    - Event-day scanner (Step 11): the browser requests camera permission,
      decodes the QR locally and sends only the opaque token to
      `POST /api/events/[id]/scan`. The server requires the authenticated
@@ -945,6 +960,14 @@ Notes:
      an unused attendance row. The first valid scan atomically writes
      `CHECKED_IN` and the exact timestamp; duplicate and concurrent scans
      return that original timestamp without overwriting it
+   - Post-event reporting (Step 12): `GET /api/events/[id]/report` is owner-only
+     and unlocks after `endsAt`, or at the end of the event day when no end time
+     exists. Each request recalculates total guests, attended (`CHECKED_IN`),
+     not attended, attendance/non-attendance percentages, card-type breakdown
+     and the full guest list with attendance status and scan time. The same
+     route serves an Excel-compatible CSV (`?format=csv`, UTF-8 BOM + CRLF) and
+     a PDF (`?format=pdf`, PDFKit) — there are no write handlers, so the report
+     cannot be edited manually
    - The pricing tier's maxGuests is the hard guest capacity: enforced
      server-side on add and CSV import (409 past the limit) and surfaced
      in the UI as a capacity meter that disables adding/importing when full

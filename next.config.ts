@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
     "tesseract.js",
     "tesseract.js-core",
     "@tesseract.js-data/eng",
+    // PDFKit loads its standard font metrics and streams from Node at runtime.
+    "pdfkit",
   ],
 };
 

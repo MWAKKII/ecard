@@ -5,12 +5,13 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import GuestManager from "@/components/guest-manager";
 import EventQrScanner from "@/components/event-qr-scanner";
+import EventReport from "@/components/event-report";
 
 /**
  * Event workspace — the screen a client lands on after clicking an event
  * (spec section 10, "Client Dashboard"): a tabbed view with Dashboard
  * summary, Guest List, Event Details, Scan E-Card and Reports.
- * Reports arrives in spec Step 12 and remains a placeholder until then.
+ * Reports is a read-only post-event view generated from attendance records.
  */
 
 type Tab = "dashboard" | "guests" | "details" | "scan" | "reports";
@@ -407,16 +408,7 @@ export default function EventWorkspacePage() {
             </div>
           ))}
 
-        {tab === "reports" && (
-          <div className="rounded-xl border border-dashed border-gray-300 bg-white p-12 text-center">
-            <p className="text-4xl">📊</p>
-            <h2 className="mt-3 text-lg font-bold text-gray-900">Post-event report</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              The final report (totals, attendance %, card-type breakdown, PDF/CSV export) unlocks in{" "}
-              <span className="font-semibold">Step 12</span>, once the event date has passed. Live numbers are on the Dashboard tab.
-            </p>
-          </div>
-        )}
+        {tab === "reports" && <EventReport key={eventId} eventId={eventId} />}
       </div>
     </div>
   );
